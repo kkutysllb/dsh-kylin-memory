@@ -146,6 +146,9 @@ export interface KmConfig {
   compactTurnCount: number;
   /** Maximum query-matched memory nodes returned by one recall. */
   recallMaxNodes: number;
+  /** Exponential freshness half-life (days) for navigation ranks. 0 disables
+   * time bias (historical behaviour). Typical: 14. */
+  freshnessHalfLifeDays: number;
   /**
    * Provider-calibrated cosine floor for automatic prompt injection.
    * Deliberately required by DEFAULT_CONFIG: ranked top-k alone always returns
@@ -174,6 +177,7 @@ export const DEFAULT_CONFIG: KmConfig = {
   dbPath: "~/.openclaw/kylin-memory.db",
   compactTurnCount: 6,
   recallMaxNodes: 6,
+  freshnessHalfLifeDays: 0,
   // Automatic prompt injection optimizes for precision. On the existing
   // text-embedding-v4 20-turn corpus, 0.70 sits above the p90 different-turn
   // similarity (0.669) and near the same-turn median (0.721). Other embedding

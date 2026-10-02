@@ -297,6 +297,21 @@ export function edgesTo(db: DatabaseSyncInstance, id: string): KmEdge[] {
 // tests/DSH fibers own independent databases.
 const fts5Availability = new WeakMap<object, boolean>();
 
+const turnFtsAvailability = new WeakMap<object, boolean>();
+
+function turnFtsAvailable(db: DatabaseSyncInstance): boolean {
+  const cached = turnFtsAvailability.get(db as object);
+  if (cached !== undefined) return cached;
+  try {
+    db.prepare("SELECT * FROM km_turn_memories_fts LIMIT 0").all();
+    turnFtsAvailability.set(db as object, true);
+    return true;
+  } catch {
+    turnFtsAvailability.set(db as object, false);
+    return false;
+  }
+}
+
 function fts5Available(db: DatabaseSyncInstance): boolean {
   const cached = fts5Availability.get(db as object);
   if (cached !== undefined) return cached;
@@ -998,21 +1013,32 @@ export function navigationCandidateTermIds(
 export function rankTurnMemoryIdsByNavigation(
   db: DatabaseSyncInstance,
   termScores: ReadonlyMap<string, number>,
+  options: { freshnessHalfLifeDays?: number } = {},
 ): string[] {
   if (!termScores.size) return [];
+  // 0 (default) keeps historical behaviour: pure graph rank, no time bias.
+  const halfLifeDays = options.freshnessHalfLifeDays ?? 0;
+  const now = Date.now();
+  const decay = (createdAt: number): number => {
+    if (halfLifeDays <= 0) return 1;
+    const ageDays = Math.max(0, now - createdAt) / 86_400_000;
+    return Math.pow(0.5, ageDays / halfLifeDays);
+  };
   const scores = new Map<string, number>();
   const rows = db.prepare(`
-    SELECT memory_id, subject_id, object_id
-    FROM km_navigation_triples
-    ORDER BY created_at, id
-  `).all() as Array<{ memory_id: string; subject_id: string; object_id: string }>;
+    SELECT t.memory_id, t.subject_id, t.object_id, m.created_at
+    FROM km_navigation_triples t
+    JOIN km_turn_memories m ON m.id = t.memory_id
+    ORDER BY t.created_at, t.id
+  `).all() as Array<{ memory_id: string; subject_id: string; object_id: string; created_at: number }>;
   for (const row of rows) {
     // Max endpoint relevance prevents a verbose turn with many triples from
-    // outranking a concise turn solely because it emitted more graph edges.
+    // outranking a concise turn solely because it emitted more graph edges;
+    // the freshness factor then scales that relevance by memory age.
     const score = Math.max(
       termScores.get(String(row.subject_id)) ?? 0,
       termScores.get(String(row.object_id)) ?? 0,
-    );
+    ) * decay(Number(row.created_at));
     const memoryId = String(row.memory_id);
     if (score > (scores.get(memoryId) ?? 0)) scores.set(memoryId, score);
   }
@@ -1049,9 +1075,26 @@ export function searchTurnMemories(
 ): KmTurnMemory[] {
   const phrase = query.trim().replace(/\s+/g, " ");
   if (!phrase) return [];
-  // Semantic search handles paraphrases. The lexical fallback deliberately
-  // requires the complete phrase; OR-ing common words such as "is"/"the"
-  // turns a fallback into another source of unrelated prompt injection.
+  // Trigram FTS5 (m18) is the primary lexical route: it handles CJK substring
+  // matches like "端口 9090" ↔ "9090 端口" without a segmenter. Trigram needs
+  // at least 3 characters; shorter queries and unavailable builds fall back to
+  // the historical complete-phrase LIKE (deliberately conservative — OR-ing
+  // common words turns a fallback into unrelated prompt injection).
+  if (turnFtsAvailable(db) && Array.from(phrase).length >= 3) {
+    try {
+      const match = `"${phrase.replace(/"/g, '""')}"`;
+      const rows = db.prepare(`
+        SELECT m.* FROM km_turn_memories m
+        JOIN km_turn_memories_fts f ON f.rowid = m.rowid
+        WHERE km_turn_memories_fts MATCH ?
+        ORDER BY m.updated_at DESC
+        LIMIT ?
+      `).all(match, limit) as any[];
+      return rows.map(row => toTurnMemory(db, row));
+    } catch {
+      // Malformed match or a broken index must never break recall.
+    }
+  }
   const rows = db.prepare(`
     SELECT * FROM km_turn_memories
     WHERE summary LIKE ?

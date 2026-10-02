@@ -101,6 +101,7 @@ export function migrate(db: DatabaseSyncInstance): void {
     m15_turn_memories,
     m16_navigation_triples,
     m17_triple_invalidation,
+    m18_turn_memories_fts,
   ];
   for (let i = cur; i < steps.length; i++) {
     steps[i](db);
@@ -561,4 +562,35 @@ function m17_triple_invalidation(db: DatabaseSyncInstance): void {
     db.exec("ALTER TABLE km_turn_memories ADD COLUMN superseded_count INTEGER NOT NULL DEFAULT 0");
   }
   db.exec("CREATE INDEX IF NOT EXISTS ix_km_navigation_triples_superseded ON km_navigation_triples(superseded_by)");
+}
+
+// ─── 轮次记忆 FTS5：trigram 分词（CJK 可用），不可用时回退 LIKE ──────
+
+function m18_turn_memories_fts(db: DatabaseSyncInstance): void {
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS km_turn_memories_fts USING fts5(
+        summary,
+        content='km_turn_memories',
+        content_rowid=rowid,
+        tokenize='trigram'
+      );
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS km_turn_memories_ai AFTER INSERT ON km_turn_memories BEGIN
+        INSERT INTO km_turn_memories_fts(rowid, summary) VALUES (NEW.rowid, NEW.summary);
+      END;
+      CREATE TRIGGER IF NOT EXISTS km_turn_memories_ad AFTER DELETE ON km_turn_memories BEGIN
+        INSERT INTO km_turn_memories_fts(km_turn_memories_fts, rowid, summary)
+        VALUES ('delete', OLD.rowid, OLD.summary);
+      END;
+      CREATE TRIGGER IF NOT EXISTS km_turn_memories_au AFTER UPDATE ON km_turn_memories BEGIN
+        INSERT INTO km_turn_memories_fts(km_turn_memories_fts, rowid, summary)
+        VALUES ('delete', OLD.rowid, OLD.summary);
+        INSERT INTO km_turn_memories_fts(rowid, summary) VALUES (NEW.rowid, NEW.summary);
+      END;
+    `);
+  } catch {
+    // trigram 分词器或 FTS5 不可用：词法路线继续走全短语 LIKE。
+  }
 }

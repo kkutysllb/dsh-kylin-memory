@@ -67,7 +67,9 @@ export class Recaller {
       ).scores;
       graphMemories = getTurnMemoriesByIds(
         this.db,
-        rankTurnMemoryIdsByNavigation(this.db, navigationScores),
+        rankTurnMemoryIdsByNavigation(this.db, navigationScores, {
+          freshnessHalfLifeDays: this.cfg.freshnessHalfLifeDays,
+        }),
       );
     }
     const turnMemories = this.mergeTurnMemoryRanks(directMemories, graphMemories, limit);
