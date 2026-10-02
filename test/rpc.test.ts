@@ -9,6 +9,7 @@ const deps: MemoryRpcDeps = {
     navigationTerms: 5,
     navigationTriples: 4,
     navigationCommunities: 1,
+    supersededTriples: 0,
     legacyNodes: 0,
     legacyEdges: 0,
     messages: 4,

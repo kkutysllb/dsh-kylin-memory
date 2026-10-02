@@ -80,7 +80,7 @@ export function closeDb(): void {
   if (_db) { _db.close(); _db = null; }
 }
 
-function migrate(db: DatabaseSyncInstance): void {
+export function migrate(db: DatabaseSyncInstance): void {
   db.exec(`CREATE TABLE IF NOT EXISTS _migrations (v INTEGER PRIMARY KEY, at INTEGER NOT NULL)`);
   const cur = (db.prepare("SELECT MAX(v) as v FROM _migrations").get() as any)?.v ?? 0;
   const steps = [
@@ -100,6 +100,7 @@ function migrate(db: DatabaseSyncInstance): void {
     m14_temporal_revisions,
     m15_turn_memories,
     m16_navigation_triples,
+    m17_triple_invalidation,
   ];
   for (let i = cur; i < steps.length; i++) {
     steps[i](db);
@@ -542,4 +543,22 @@ function m8_backfill_community_signatures(db: DatabaseSyncInstance): void {
       WHERE id=?
     `).run(memberSignature, row.id);
   }
+}
+
+// ─── 事实失效：同 (subject, predicate) 新值到达时标记旧 triple ──────
+
+function m17_triple_invalidation(db: DatabaseSyncInstance): void {
+  const tripleColumns = new Set(
+    (db.prepare("PRAGMA table_info(km_navigation_triples)").all() as Array<{ name: string }>).map(c => c.name),
+  );
+  if (!tripleColumns.has("superseded_by")) {
+    db.exec("ALTER TABLE km_navigation_triples ADD COLUMN superseded_by TEXT");
+  }
+  const memoryColumns = new Set(
+    (db.prepare("PRAGMA table_info(km_turn_memories)").all() as Array<{ name: string }>).map(c => c.name),
+  );
+  if (!memoryColumns.has("superseded_count")) {
+    db.exec("ALTER TABLE km_turn_memories ADD COLUMN superseded_count INTEGER NOT NULL DEFAULT 0");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS ix_km_navigation_triples_superseded ON km_navigation_triples(superseded_by)");
 }

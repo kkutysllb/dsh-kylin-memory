@@ -1369,6 +1369,11 @@ export function forgetTurnMemories(
 
   db.exec("BEGIN");
   try {
+    // Remember which memories are being deleted: any invalidation they caused
+    // must be rolled back so superseded facts become recallable again.
+    const deletedIds: string[] = sessionId
+      ? (db.prepare("SELECT id FROM km_turn_memories WHERE session_id = ?").all(sessionId) as Array<{ id: string }>).map(r => r.id)
+      : [memoryId];
     if (sessionId) {
       db.prepare("DELETE FROM km_turn_memories WHERE session_id = ?").run(sessionId);
       const messages = db.prepare("DELETE FROM km_messages WHERE session_id = ?").run(sessionId);
@@ -1389,6 +1394,16 @@ export function forgetTurnMemories(
         deletedMessages += Number(orphanMessage.run(id).changes);
       }
       counts.messages = deletedMessages;
+    }
+    if (deletedIds.length) {
+      const placeholders = deletedIds.map(() => "?").join(", ");
+      const restored = (db.prepare(
+        `SELECT DISTINCT memory_id FROM km_navigation_triples WHERE superseded_by IN (${placeholders})`,
+      ).all(...deletedIds) as Array<{ memory_id: string }>).map(r => r.memory_id);
+      db.prepare(
+        `UPDATE km_navigation_triples SET superseded_by = NULL WHERE superseded_by IN (${placeholders})`,
+      ).run(...deletedIds);
+      recomputeSupersededCounts(db, restored);
     }
     counts.navigationTerms = Number(db.prepare(`
       DELETE FROM km_navigation_terms
@@ -1430,4 +1445,90 @@ export function listTurnMemories(
     (db.prepare(`SELECT COUNT(*) AS c FROM km_turn_memories ${where}`).get(...params) as { c: number }).c,
   );
   return { memories: rows, total };
+}
+
+// ─── 事实失效：同 (subject, predicate) 新值标记旧值，召回时过滤 ──────
+
+/**
+ * Mark older triples invalidated by a freshly written memory: same normalized
+ * subject AND predicate with a different object means the world changed, so
+ * the older triple gets superseded_by=<new memory id> and the older memory's
+ * superseded_count is recomputed. Deliberately conservative — no semantic
+ * predicate matching, no summary-level guessing (documented v1 limit). Safe to
+ * re-run: updates are keyed by the invalidating memory id.
+ */
+export function supersedeConflictingTriples(db: DatabaseSyncInstance, memory: KmTurnMemory): void {
+  db.exec("BEGIN");
+  try {
+    const conflicting = db.prepare(`
+      SELECT t.id AS triple_id, t.memory_id AS old_memory_id
+      FROM km_navigation_triples t
+      JOIN km_turn_memories m ON m.id = t.memory_id
+      WHERE t.subject_id IN (SELECT subject_id FROM km_navigation_triples WHERE memory_id = ?)
+        AND t.predicate IN (SELECT predicate FROM km_navigation_triples WHERE memory_id = ?)
+        AND t.superseded_by IS NULL
+        AND t.memory_id <> ?
+        AND m.created_at <= (SELECT created_at FROM km_turn_memories WHERE id = ?)
+        AND NOT EXISTS (
+          SELECT 1 FROM km_navigation_triples n
+          WHERE n.memory_id = ?
+            AND n.subject_id = t.subject_id
+            AND n.predicate = t.predicate
+            AND n.object_id = t.object_id
+        )
+    `);
+    const mark = db.prepare("UPDATE km_navigation_triples SET superseded_by = ? WHERE id = ?");
+    const affected = new Set<string>();
+    for (const row of conflicting.all(memory.id, memory.id, memory.id, memory.id, memory.id) as Array<{
+      triple_id: string; old_memory_id: string;
+    }>) {
+      mark.run(memory.id, row.triple_id);
+      affected.add(row.old_memory_id);
+    }
+    recomputeSupersededCounts(db, affected);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Recompute the redundant superseded_count column for the given memories
+ * (or every memory with triples when the set is empty). Idempotent. */
+function recomputeSupersededCounts(db: DatabaseSyncInstance, memoryIds: Iterable<string>): void {
+  const recompute = db.prepare(`
+    UPDATE km_turn_memories
+    SET superseded_count = (
+      SELECT COUNT(*) FROM km_navigation_triples t
+      WHERE t.memory_id = km_turn_memories.id AND t.superseded_by IS NOT NULL
+    )
+    WHERE id = ?
+  `);
+  const seen = new Set<string>();
+  for (const id of memoryIds) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      recompute.run(id);
+    }
+  }
+}
+
+/**
+ * Given candidate memory ids, drop the ones whose fact was explicitly
+ * invalidated by another candidate in the same set. An invalidated memory
+ * stays recallable when its invalidating memory is NOT recalled — it may
+ * still be the best available context for the query.
+ */
+export function filterSupersededTurnMemories(db: DatabaseSyncInstance, memoryIds: string[]): string[] {
+  if (memoryIds.length === 0) return memoryIds;
+  const placeholders = memoryIds.map(() => "?").join(", ");
+  const rows = db.prepare(`
+    SELECT DISTINCT memory_id FROM km_navigation_triples
+    WHERE superseded_by IS NOT NULL
+      AND memory_id IN (${placeholders})
+      AND superseded_by IN (${placeholders})
+  `).all(...memoryIds, ...memoryIds) as Array<{ memory_id: string }>;
+  if (rows.length === 0) return memoryIds;
+  const superseded = new Set(rows.map(row => row.memory_id));
+  return memoryIds.filter(id => !superseded.has(id));
 }

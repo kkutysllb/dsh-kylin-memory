@@ -22,6 +22,7 @@ import {
   findNavigationSeedTermIds, navigationCandidateTermIds,
   rankTurnMemoryIdsByNavigation, getTurnMemoriesByIds,
   hasTurnMemories,
+  filterSupersededTurnMemories,
 } from "../store/store.ts";
 import { personalizedNavigationPageRank } from "../graph/pagerank.ts";
 
@@ -71,7 +72,17 @@ export class Recaller {
     }
     const turnMemories = this.mergeTurnMemoryRanks(directMemories, graphMemories, limit);
     if (turnMemories.length) {
-      const memoryIds = turnMemories.map(memory => memory.id);
+      // Facts explicitly invalidated by a newer recalled memory leave the
+      // result set; invalidated memories whose invalidator was NOT recalled
+      // stay (they may still be the best available context).
+      const survivingIds = filterSupersededTurnMemories(this.db, turnMemories.map(memory => memory.id));
+      const survivors = survivingIds.length === turnMemories.length
+        ? turnMemories
+        : turnMemories.filter(memory => survivingIds.includes(memory.id));
+      const memoryIds = survivors.map(memory => memory.id);
+      if (!memoryIds.length) {
+        return this.recallPrecise(query, limit, queryVector, hasTurnMemories(this.db));
+      }
       const nodes = nodesForTurnMemories(
         this.db,
         memoryIds,
@@ -81,7 +92,7 @@ export class Recaller {
       return {
         nodes,
         edges,
-        turnMemories,
+        turnMemories: survivors,
         triples: getNavigationTriplesForMemories(this.db, memoryIds, navigationScores),
       };
     }

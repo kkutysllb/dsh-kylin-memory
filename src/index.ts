@@ -32,6 +32,7 @@ import {
   requeueQuarantined,
   forgetTurnMemories,
   listTurnMemories,
+  supersedeConflictingTriples,
   saveMessageOnce,
   updateNode,
   upsertNode,
@@ -506,6 +507,10 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       })),
     });
     replaceNavigationTriples(db, turnMemory, result.triples);
+    // Same (subject, predicate) + different object in older memories means the
+    // world changed: mark the stale triples invalidated by this memory so
+    // recall can prefer the newest value (docs/02-design/0201 A1).
+    supersedeConflictingTriples(db, turnMemory);
     // The navigation graph becomes queryable only after its atomic SPO write.
     // This runs inside the existing background extraction worker, never in the
     // foreground turn, and makes the newest completed memory available to PPR.
@@ -918,6 +923,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
         : "";
       const messageCount = Number((db.prepare("SELECT COUNT(*) AS count FROM km_messages").get() as any)?.count ?? 0);
       const turnVectorCount = Number((db.prepare("SELECT COUNT(*) AS count FROM km_turn_vectors").get() as any)?.count ?? 0);
+      const supersededCount = Number((db.prepare("SELECT COUNT(*) AS count FROM km_navigation_triples WHERE superseded_by IS NOT NULL").get() as any)?.count ?? 0);
       const extraction = getExtractionStats(db);
       const latestFailure = db.prepare(`
         SELECT extraction_error FROM km_messages
@@ -925,7 +931,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
         ORDER BY extraction_updated_at DESC LIMIT 1
       `).get() as { extraction_error: string } | undefined;
       const retentionRevision = messageRetentionPolicyRevision(messageRetention);
-      return `${latestFailure ? `Extraction attention required: ${latestFailure.extraction_error}\n` : ""}Kylin Memory active (DSH native)\nStore: ${config.dbPath}\nTurn memories: ${stats.turnMemories}\nNavigation: ${stats.navigationTerms} terms / ${stats.navigationTriples} triples / ${stats.navigationCommunities} communities\nLegacy graph: ${stats.totalNodes} nodes / ${stats.totalEdges} edges\nMessages: ${messageCount}\nExtraction: ${extractionEnabled ? "enabled" : "disabled"} (pending=${extraction.pending}, succeeded=${extraction.succeeded}, quarantined=${extraction.quarantined})\nExtraction source: one completed turn = user question + final answer\nExtraction scheduling: live turn/end only, one serial worker per session, no startup history import, no automatic retries\nRecall: ${recallEnabled ? "enabled" : "disabled"}\nEmbedding: ${embeddingState}${embeddingModel}\nTurn vectors: ${turnVectorCount}/${stats.turnMemories}\nLegacy vectors: ${vectors.count}/${stats.totalNodes}${vectors.dimensions.length ? ` (${vectors.dimensions.join(", ")} dimensions)` : ""}\nAssistant tools: ${assistantTools}\nMessage retention: keep=${messageRetention.keep}, recentTurns=${messageRetention.recentTurns}, retentionDays=${messageRetention.retentionDays}, batchSize=${messageRetention.batchSize}, dryRun=${messageRetention.dryRun}, revision=${retentionRevision}\nRetention GC: runs=${retentionMetrics.runs}, dryRuns=${retentionMetrics.dryRuns}, selected=${retentionMetrics.selectedRows}, deleted=${retentionMetrics.deletedRows}, estimatedDeletedBytes=${retentionMetrics.deletedBytes}\nContext takeover: attached=${compactionMetrics.attached}, selected=${compactionMetrics.selected}, succeeded=${compactionMetrics.succeeded}, failed=${compactionMetrics.failed}, shadowedEvents=${compactionMetrics.shadowedEvents}, shadowedTokens=${compactionMetrics.shadowedTokens}, projectedTurns=${compactionMetrics.projectedTurns}, projectedEvents=${compactionMetrics.projectedEvents}, projectedTokens=${compactionMetrics.projectedTokens}`;
+      return `${latestFailure ? `Extraction attention required: ${latestFailure.extraction_error}\n` : ""}Kylin Memory active (DSH native)\nStore: ${config.dbPath}\nTurn memories: ${stats.turnMemories}\nNavigation: ${stats.navigationTerms} terms / ${stats.navigationTriples} triples / ${stats.navigationCommunities} communities\nSuperseded triples: ${supersededCount}\nLegacy graph: ${stats.totalNodes} nodes / ${stats.totalEdges} edges\nMessages: ${messageCount}\nExtraction: ${extractionEnabled ? "enabled" : "disabled"} (pending=${extraction.pending}, succeeded=${extraction.succeeded}, quarantined=${extraction.quarantined})\nExtraction source: one completed turn = user question + final answer\nExtraction scheduling: live turn/end only, one serial worker per session, no startup history import, no automatic retries\nRecall: ${recallEnabled ? "enabled" : "disabled"}\nEmbedding: ${embeddingState}${embeddingModel}\nTurn vectors: ${turnVectorCount}/${stats.turnMemories}\nLegacy vectors: ${vectors.count}/${stats.totalNodes}${vectors.dimensions.length ? ` (${vectors.dimensions.join(", ")} dimensions)` : ""}\nAssistant tools: ${assistantTools}\nMessage retention: keep=${messageRetention.keep}, recentTurns=${messageRetention.recentTurns}, retentionDays=${messageRetention.retentionDays}, batchSize=${messageRetention.batchSize}, dryRun=${messageRetention.dryRun}, revision=${retentionRevision}\nRetention GC: runs=${retentionMetrics.runs}, dryRuns=${retentionMetrics.dryRuns}, selected=${retentionMetrics.selectedRows}, deleted=${retentionMetrics.deletedRows}, estimatedDeletedBytes=${retentionMetrics.deletedBytes}\nContext takeover: attached=${compactionMetrics.attached}, selected=${compactionMetrics.selected}, succeeded=${compactionMetrics.succeeded}, failed=${compactionMetrics.failed}, shadowedEvents=${compactionMetrics.shadowedEvents}, shadowedTokens=${compactionMetrics.shadowedTokens}, projectedTurns=${compactionMetrics.projectedTurns}, projectedEvents=${compactionMetrics.projectedEvents}, projectedTokens=${compactionMetrics.projectedTokens}`;
     },
   });
 
@@ -1097,6 +1103,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
         navigationTerms: stats.navigationTerms,
         navigationTriples: stats.navigationTriples,
         navigationCommunities: stats.navigationCommunities,
+        supersededTriples: Number((db.prepare("SELECT COUNT(*) AS count FROM km_navigation_triples WHERE superseded_by IS NOT NULL").get() as any)?.count ?? 0),
         legacyNodes: stats.totalNodes,
         legacyEdges: stats.totalEdges,
         messages: messageCount,

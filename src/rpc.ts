@@ -65,6 +65,7 @@ export interface MemoryOverviewPayload {
   navigationTerms: number;
   navigationTriples: number;
   navigationCommunities: number;
+  supersededTriples: number;
   legacyNodes: number;
   legacyEdges: number;
   messages: number;
