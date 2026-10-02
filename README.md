@@ -84,7 +84,9 @@ export KYLIN_MEMORY_EMBEDDING_DIMENSIONS=1024
 | [docs/01-tech/0103-召回管线.md](docs/01-tech/0103-召回管线.md) | 双路召回、RRF、LPA/PPR、来源回溯 |
 | [docs/01-tech/0104-上游移植映射与差异.md](docs/01-tech/0104-上游移植映射与差异.md) | 从 graph-memory 移植了什么、改了什么、裁了什么 |
 | [docs/01-tech/0105-rpc管理通道与UI决策.md](docs/01-tech/0105-rpc管理通道与UI决策.md) | headless RPC 管理通道、可选面语义、无 UI 决策记录 |
-| [docs/03-plan/0301-增强路线图.md](docs/03-plan/0301-增强路线图.md) | slot 面板、km_forget、退避调度等规划 |
+| [docs/02-design/0201-缺陷分析与业界对标.md](docs/02-design/0201-缺陷分析与业界对标.md) | v0.1.0 缺陷登记册（A/B/C/D 编号）与 Zep/Mem0/Letta/HippoRAG 对标 |
+| [docs/03-plan/0301-增强路线图.md](docs/03-plan/0301-增强路线图.md) | 路线图索引（按缺陷编号组织） |
+| [docs/03-plan/0302-升级实施计划.md](docs/03-plan/0302-升级实施计划.md) | v0.2/v0.3 实施计划：里程碑、schema 迁移、测试与验收 |
 | [release/](release/) | 每版本变更记录与发版流程 |
 
 ## 开发
