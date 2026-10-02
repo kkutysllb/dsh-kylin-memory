@@ -1,0 +1,53 @@
+# One installable bundle row mounts the Kylin Memory host service.
+#
+# This file stays plain static YAML on purpose: DSH and QiLin load the exact
+# same bundle layer, so no host-specific script-expression helpers are used.
+# Every environment-variable fallback (extraction route, embedding provider,
+# busy timeout, database location) is resolved inside src/index.ts, where it
+# is unit-testable and identical on both hosts.
+- insert:
+    - id: dsh-kylin-memory
+      name: 'dsh-kylin-memory'
+      config:
+        # Automatic recall is the default path and needs no tool schema.
+        # Set to "search" to expose km_search, or "all" for admin tools.
+        assistantTools: none
+        extractionEnabled: true
+        recallEnabled: true
+        recallMaxNodes: 6
+        # Optional cosine floor. Leave unset unless calibrated for the chosen
+        # embedding model; ranked top-k is provider-neutral by default.
+        # semanticScoreThreshold: 0.7
+        maintenanceInterval: 6
+        # Extraction is a separate, lightweight workload. To give it a
+        # dedicated route, either set llmProvider/llmModel here or export
+        # KYLIN_MEMORY_LLM_PROVIDER / KYLIN_MEMORY_LLM_MODEL.
+        # llmProvider:
+        # llmModel:
+        # llmReasoningEffort:
+        # llmMaxTokens:
+        # Each committed turn is one extraction job containing only the
+        # original user question and the final visible assistant answer.
+        # Tool traffic and reasoning are never sent to the extraction model.
+        # Durable events are separate from the compacted model surface. The
+        # safe default never deletes raw messages. To opt in, first use
+        # keep: referenced with dryRun: true and inspect km_stats/km_maintain.
+        messageRetention:
+          keep: all
+          recentTurns: 0
+          retentionDays: 0
+          batchSize: 500
+          dryRun: false
+        # Kylin Memory retains the newest completed user turns and replaces
+        # the older model-surface prefix itself. This is model-free: no host
+        # compaction/summarization request and no growing checkpoint.
+        contextCompactionEnabled: true
+        freshTurnCount: 5
+        # Hide completed-turn tool traces while keeping the native question
+        # and final visible answer on the model surface.
+        projectCompletedTurnTools: true
+        # Database location resolves at runtime:
+        # KYLIN_MEMORY_DATA_DIR > $DSH_HOME > $QILIN_HOME > ~/.dsh
+        # SQLite write-lock wait: KYLIN_MEMORY_DB_BUSY_TIMEOUT_MS (default 5000).
+        # Semantic vector recall (optional; FTS5 fallback otherwise):
+        #   KYLIN_MEMORY_EMBEDDING_API_KEY / _BASE_URL / _MODEL / _DIMENSIONS

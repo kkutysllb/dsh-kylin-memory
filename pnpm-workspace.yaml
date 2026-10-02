@@ -1,0 +1,8 @@
+allowBuilds:
+  esbuild: set this to true or false
+# 本地插件包（单包，非 monorepo）。pnpm 设置：
+# - esbuild 需要构建脚本（平台二进制安装）；
+# - 跳过 run 前依赖状态校验，避免 ignored-builds 警告阻断脚本。
+onlyBuiltDependencies:
+  - esbuild
+verifyDepsBeforeRun: false

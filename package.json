@@ -1,0 +1,81 @@
+{
+  "name": "dsh-kylin-memory",
+  "version": "0.1.0",
+  "description": "Knowledge graph memory for DeepSeek Harness and QiLin/Kylin — turn-memory navigation, cross-session recall, PageRank, communities, and vector search",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "kylin",
+    "qilin",
+    "cordis",
+    "agent-memory",
+    "knowledge-graph",
+    "sqlite"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kkutysllb/dsh-kylin-memory.git"
+  },
+  "homepage": "https://github.com/kkutysllb/dsh-kylin-memory#readme",
+  "bugs": {
+    "url": "https://github.com/kkutysllb/dsh-kylin-memory/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "release"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "node scripts/build.mjs",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "smoke": "node scripts/smoke-plugin.mjs",
+    "verify:package": "node scripts/verify-package.mjs",
+    "prepack": "npm run check && npm run smoke"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.48"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.0-rc.2",
+    "@types/node": "^22.13.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-session-format-v3-to-v4": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-session-format-v3-to-v4": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "qilin": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

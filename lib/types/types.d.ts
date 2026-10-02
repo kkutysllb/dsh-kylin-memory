@@ -1,0 +1,150 @@
+/**
+ * kylin-memory
+ *
+ * By: adoresever
+ * Email: Wywelljob@gmail.com
+ */
+/**
+ * kylin-memory 类型定义
+ *
+ * 节点：TASK / SKILL / EVENT
+ * 边：USED_SKILL / SOLVED_BY / REQUIRES / PATCHES / CONFLICTS_WITH
+ */
+/** Auxiliary extraction LLM entry: one system+user prompt in, one tool-argument JSON string out. */
+export type CompleteFn = (system: string, user: string) => Promise<string>;
+export type NodeType = "TASK" | "SKILL" | "EVENT";
+export type NodeStatus = "active" | "deprecated";
+export type TurnOutcome = "completed" | "partial" | "failed" | "informational" | "unknown";
+export interface NodeTemporal {
+    /** Time stated by the evidence, preserved as written instead of guessed. */
+    eventTime?: string;
+    /** When the fact or decision starts to apply, if the dialogue says so. */
+    validFrom?: string;
+    /** When it stops applying, if known. */
+    validUntil?: string;
+    state?: "current" | "historical" | "uncertain" | "superseded";
+}
+export interface KmNode {
+    id: string;
+    type: NodeType;
+    name: string;
+    description: string;
+    content: string;
+    temporal: NodeTemporal;
+    status: NodeStatus;
+    validatedCount: number;
+    sourceSessions: string[];
+    communityId: string | null;
+    pagerank: number;
+    createdAt: number;
+    updatedAt: number;
+}
+/**
+ * Compact episodic index for one completed question/final-answer pair.
+ * The exact source messages remain in km_messages; this record is the first
+ * retrieval surface and never replaces its evidence.
+ */
+export interface KmTurnMemory {
+    id: string;
+    sessionId: string;
+    summary: string;
+    outcome: TurnOutcome;
+    sources: Array<{
+        messageId: string;
+        turnIndex: number;
+    }>;
+    createdAt: number;
+    updatedAt: number;
+}
+/**
+ * A lightweight subject-predicate-object index into one turn memory.
+ * It is navigation metadata only; the turn summary and exact source Q/A are
+ * the evidence returned to the model after retrieval.
+ */
+export interface KmNavigationTriple {
+    id: string;
+    memoryId: string;
+    sessionId: string;
+    subjectId: string;
+    subject: string;
+    predicate: string;
+    objectId: string;
+    object: string;
+    subjectCommunityId: string | null;
+    objectCommunityId: string | null;
+    createdAt: number;
+}
+export type EdgeType = "RELATES" | "SUPERSEDES" | "USED_SKILL" | "SOLVED_BY" | "REQUIRES" | "PATCHES" | "CONFLICTS_WITH";
+export interface KmEdge {
+    id: string;
+    fromId: string;
+    toId: string;
+    type: EdgeType;
+    instruction: string;
+    condition?: string;
+    sessionId: string;
+    createdAt: number;
+}
+export interface ExtractionResult {
+    turn: {
+        /** One self-contained sentence describing the request and observed result. */
+        summary: string;
+        /** Outcome reported by the completed dialogue; not external verification. */
+        outcome: TurnOutcome;
+    };
+    /** Simple navigation derived from turn.summary; never a second fact body. */
+    triples: Array<{
+        subject: string;
+        predicate: string;
+        object: string;
+    }>;
+}
+export interface RecallResult {
+    nodes: KmNode[];
+    edges: KmEdge[];
+    /** Query-matched episodic summaries, ordered by retrieval relevance. */
+    turnMemories: KmTurnMemory[];
+    /** Navigation triples attached to the matched turn memories. */
+    triples: KmNavigationTriple[];
+}
+export interface EmbeddingConfig {
+    apiKey?: string;
+    /** Runtime-only credential resolver. Host adapters use this to avoid putting secrets in config. */
+    apiKeyResolver?: () => Promise<string | undefined>;
+    baseURL?: string;
+    /** Alias used by OpenClaw and several OpenAI-compatible providers. */
+    baseUrl?: string;
+    model?: string;
+    dimensions?: number;
+}
+export interface KmConfig {
+    dbPath: string;
+    /** SQLite write-lock wait in milliseconds; omitted uses the shared store policy. */
+    dbBusyTimeoutMs?: number;
+    compactTurnCount: number;
+    /** Maximum query-matched memory nodes returned by one recall. */
+    recallMaxNodes: number;
+    /**
+     * Provider-calibrated cosine floor for automatic prompt injection.
+     * Deliberately required by DEFAULT_CONFIG: ranked top-k alone always returns
+     * a "nearest" memory even when no memory is actually relevant.
+     */
+    semanticScoreThreshold?: number;
+    /** Number of recent user turns kept as native question/final-answer endpoints on the host context surface. */
+    freshTurnCount: number;
+    embedding?: EmbeddingConfig;
+    llm?: {
+        apiKey?: string;
+        baseURL?: string;
+        /** Alias used by OpenClaw and several OpenAI-compatible providers. */
+        baseUrl?: string;
+        model?: string;
+        /** Required only for direct Anthropic REST calls, whose protocol requires a response cap. */
+        maxTokens?: number;
+    };
+    /** PageRank 阻尼系数 */
+    pagerankDamping: number;
+    /** PageRank 迭代次数 */
+    pagerankIterations: number;
+}
+export declare const DEFAULT_CONFIG: KmConfig;

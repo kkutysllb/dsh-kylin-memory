@@ -1,0 +1,173 @@
+/**
+ * 社区检测 — Label Propagation Algorithm
+ *
+ * 原理：每个节点初始自成一个社区，迭代中每个节点采纳邻居中最频繁的社区标签。
+ *       收敛后自然形成社区划分。
+ *
+ * 为什么选 Label Propagation：
+ *   - 不需要外部依赖，也不需要预先指定社区数量
+ *   - O(iterations * edges)，适合随对话异步更新的小型导航图
+ *   - 社区仅缩小查询候选范围；查询相关性仍由实时 PPR 决定
+ *
+ * 用途：
+ *   - 发现知识域（Docker 相关技能自动聚成一组）
+ *   - recall 时把社区作为候选范围，不把整个社区注入提示词
+ *   - PPR 选中 memory 后再回溯其原始问答证据
+ *   - kg_stats 展示社区分布
+ */
+
+import { type DatabaseSyncInstance } from "../store/sqlite.ts";
+import { updateCommunities, updateNavigationCommunities } from "../store/store.ts";
+
+export interface CommunityResult {
+  labels: Map<string, string>;
+  /** 社区 ID → 成员节点 ID 列表 */
+  communities: Map<string, string[]>;
+  count: number;
+}
+
+/**
+ * 运行 Label Propagation 并写回 km_nodes.community_id
+ *
+ * 把有向边当无向边处理（知识关联不分方向）
+ */
+export function detectCommunities(db: DatabaseSyncInstance, maxIter?: number): CommunityResult {
+  // 读取活跃节点
+  const nodeRows = db.prepare(
+    "SELECT id FROM km_nodes WHERE status='active'"
+  ).all() as any[];
+
+  if (nodeRows.length === 0) {
+    return { labels: new Map(), communities: new Map(), count: 0 };
+  }
+
+  const nodeIds = nodeRows.map((r: any) => r.id);
+
+  // 读取边，构建无向邻接表
+  const edgeRows = db.prepare("SELECT from_id, to_id FROM km_edges").all() as any[];
+  const result = propagateLabels(nodeIds, edgeRows, maxIter);
+
+  // 写回数据库
+  updateCommunities(db, result.labels);
+  return result;
+}
+
+/** Build communities on the generic SPO navigation graph. */
+export function detectNavigationCommunities(
+  db: DatabaseSyncInstance,
+  maxIter?: number,
+): CommunityResult {
+  const nodeIds = (db.prepare("SELECT id FROM km_navigation_terms ORDER BY id").all() as any[])
+    .map(row => String(row.id));
+  if (!nodeIds.length) return { labels: new Map(), communities: new Map(), count: 0 };
+  const edges = db.prepare(
+    "SELECT subject_id AS from_id, object_id AS to_id FROM km_navigation_triples",
+  ).all() as any[];
+  const result = propagateLabels(nodeIds, edges, maxIter);
+  updateNavigationCommunities(db, result.labels);
+  return result;
+}
+
+function propagateLabels(
+  nodeIds: string[],
+  edgeRows: Array<{ from_id: string; to_id: string }>,
+  maxIter?: number,
+): CommunityResult {
+  const nodeSet = new Set(nodeIds);
+  const adj = new Map<string, string[]>();
+  for (const id of nodeIds) adj.set(id, []);
+  for (const edge of edgeRows) {
+    if (!nodeSet.has(edge.from_id) || !nodeSet.has(edge.to_id)) continue;
+    adj.get(edge.from_id)!.push(edge.to_id);
+    adj.get(edge.to_id)!.push(edge.from_id);
+  }
+
+  // 初始标签：每个节点 = 自己的 ID
+  const label = new Map<string, string>();
+  for (const id of nodeIds) label.set(id, id);
+
+  // A graph cannot need more propagation passes than its node count. Sorted
+  // traversal makes identical data produce identical community assignments.
+  const iterationLimit = maxIter ?? nodeIds.length;
+  for (let iter = 0; iter < iterationLimit; iter++) {
+    let changed = false;
+    for (const nodeId of nodeIds) {
+      const neighbors = adj.get(nodeId) || [];
+      if (neighbors.length === 0) continue;
+
+      // 统计邻居标签频次
+      const freq = new Map<string, number>();
+      for (const nb of neighbors) {
+        const l = label.get(nb)!;
+        freq.set(l, (freq.get(l) || 0) + 1);
+      }
+
+      // 取频次最高的标签（相同频次取字典序最小，保证确定性）
+      let bestLabel = label.get(nodeId)!;
+      let bestCount = 0;
+      for (const [l, c] of freq) {
+        if (c > bestCount || (c === bestCount && l < bestLabel)) {
+          bestLabel = l;
+          bestCount = c;
+        }
+      }
+
+      if (label.get(nodeId) !== bestLabel) {
+        label.set(nodeId, bestLabel);
+        changed = true;
+      }
+    }
+
+    if (!changed) break;
+  }
+
+  // 构建社区映射
+  const communities = new Map<string, string[]>();
+  for (const [nodeId, communityId] of label) {
+    if (!communities.has(communityId)) communities.set(communityId, []);
+    communities.get(communityId)!.push(nodeId);
+  }
+
+  // 给社区编号（用最大成员数排序，编号 c-1, c-2, ...）
+  const sorted = Array.from(communities.entries())
+    .sort((a, b) => b[1].length - a[1].length);
+
+  const renameMap = new Map<string, string>();
+  sorted.forEach(([oldId], i) => renameMap.set(oldId, `c-${i + 1}`));
+
+  // 重命名标签
+  const finalLabels = new Map<string, string>();
+  for (const [nodeId, oldLabel] of label) {
+    finalLabels.set(nodeId, renameMap.get(oldLabel) || oldLabel);
+  }
+
+  const finalCommunities = new Map<string, string[]>();
+  for (const [oldId, members] of communities) {
+    const newId = renameMap.get(oldId) || oldId;
+    finalCommunities.set(newId, members);
+  }
+
+  return {
+    labels: finalLabels,
+    communities: finalCommunities,
+    count: finalCommunities.size,
+  };
+}
+
+/**
+ * 获取旧概念图中同社区的节点 ID 列表。
+ */
+export function getCommunityPeers(db: DatabaseSyncInstance, nodeId: string, limit = 5): string[] {
+  const row = db.prepare(
+    "SELECT community_id FROM km_nodes WHERE id=? AND status='active'"
+  ).get(nodeId) as any;
+
+  if (!row?.community_id) return [];
+
+  return (db.prepare(`
+    SELECT id FROM km_nodes
+    WHERE community_id=? AND id!=? AND status='active'
+    ORDER BY validated_count DESC, updated_at DESC
+    LIMIT ?
+  `).all(row.community_id, nodeId, limit) as any[]).map(r => r.id);
+}
