@@ -24,7 +24,14 @@
    git add -A && git commit -m "release(vX.Y.Z): <一句话>"
    git tag -a vX.Y.Z -m "vX.Y.Z"
    ```
-5. **发布**：`npm publish`（`prepack` 自动 check+smoke），随后 GitHub Release 复制 `release/vX.Y.Z.md`。
+5. **同步镜像仓（推送前必须）**：
+   ```bash
+   pnpm sync:mirror                                   # 真源 → ../dsh-plugins/dsh-kylin-memory/
+   cd ../dsh-plugins && git add -A && git commit -m "sync(dsh-kylin-memory): vX.Y.Z" && git push
+   pnpm sync:check                                    # 对账零差异
+   ```
+   两个安装入口（独立仓 / dsh-plugins 子目录）必须内容一致。
+6. **发布**：`npm publish`（`prepack` 自动 check+smoke），推送 tag 后 `node scripts/create-github-releases.mjs v0.1.0` 把 release/vX.Y.Z.md 同步为 GitHub Release（幂等）。
 
 ## 注意
 

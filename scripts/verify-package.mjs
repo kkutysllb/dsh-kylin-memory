@@ -21,7 +21,9 @@ for (const dependency of Object.keys(manifest.dependencies ?? {})) {
   }
 }
 
-const output = execFileSync("npm", ["pack", "--dry-run", "--json"], {
+// --ignore-scripts: skip the prepack lifecycle (check+smoke just ran in the
+// caller); their stdout would otherwise interleave with --json output.
+const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
   cwd: new URL("..", import.meta.url),
   encoding: "utf8",
 });

@@ -70,28 +70,15 @@ check('host bundle 导出 apply', /\bexport\b[\s\S]{0,200}\bfunction apply\b|con
 check('host bundle 声明 inject 契约名', hostSource.includes('"tools"') && hostSource.includes('"llm"') && hostSource.includes('"sessions"') && hostSource.includes('"tokenMeter"'))
 check('host bundle 注册 km_* 工具', hostSource.includes('km_search') && hostSource.includes('km_status'))
 
-/* ═══ 4. client bundle ═══ */
+/* ═══ 4. 无 UI 决策与 RPC 通道 ═══ */
 
-check('dsh.client.platform = web', manifest.dsh?.client?.platform === 'web')
-check('dsh.client 与 qilin.client 声明一致',
-  JSON.stringify(manifest.dsh?.client) === JSON.stringify(manifest.qilin?.client))
-check('exports["./client"] 声明 client bundle', manifest.exports?.['./client'] === './lib/client.js')
-
-const clientPath = join(packageRoot, 'lib/client.js')
-check('lib/client.js 存在', existsSync(clientPath))
-if (existsSync(clientPath)) {
-  const clientSource = await readFile(clientPath, 'utf8')
-  check('client bundle 走 __ModuleLoader__ 自注册协议',
-    clientSource.trimStart().startsWith('window.__ModuleLoader__.load('),
-    'client module-table 契约')
-  check('client bundle 无裸 ESM export 语句', !/^export /m.test(clientSource))
-  check('client bundle 以 require("react") 引 React',
-    clientSource.includes('require("react")') || clientSource.includes("require('react')"))
-  check('client bundle 注册 id 与包名一致', clientSource.includes(`id: ${JSON.stringify(manifest.name)}`))
-  check('client bundle 注册 panellist + main 双 slot',
-    clientSource.includes('sidebar.panellist') && (clientSource.includes('"main"') || clientSource.includes("'main'")))
-  check('client bundle 走 /dsh-kylin-memory RPC 通道', clientSource.includes('/dsh-kylin-memory'))
-}
+// UI 决策（2026-10-02）：纯 Agent 工具入口，不注册任何 client/slot。
+check('manifest 不含 client 交付块（无 UI 决策）',
+  manifest.dsh?.client === undefined && manifest.qilin?.client === undefined)
+check('exports 不含 ./client', manifest.exports?.['./client'] === undefined)
+check('仓库无 src/client 残留', !existsSync(join(packageRoot, 'src/client')))
+check('host bundle 含 /dsh-kylin-memory RPC 管理通道（headless admin API）',
+  hostSource.includes('/dsh-kylin-memory'))
 
 /* ═══ 5. 声明产物 ═══ */
 
@@ -102,10 +89,6 @@ check('lib/types/index.d.ts 存在（types 导出）', existsSync(typesIndex))
 
 const size = statSync(hostPath).size
 check(`host bundle 自包含（> 40KB）：${Math.round(size / 1024)}KB`, size > 40 * 1024)
-if (existsSync(clientPath)) {
-  const clientSize = statSync(clientPath).size
-  check(`client bundle 自包含（> 8KB）：${Math.round(clientSize / 1024)}KB`, clientSize > 8 * 1024)
-}
 
 const summary = failures === 0
   ? `\n${manifest.name}@${manifest.version} smoke: ALL PASS`

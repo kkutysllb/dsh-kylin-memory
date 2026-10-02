@@ -28,7 +28,6 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -49,6 +48,9 @@
     "check": "npm run typecheck && npm run test && npm run build",
     "smoke": "node scripts/smoke-plugin.mjs",
     "verify:package": "node scripts/verify-package.mjs",
+    "sync:mirror": "node scripts/sync-to-dsh-plugins.mjs",
+    "sync:check": "node scripts/sync-to-dsh-plugins.mjs --check",
+    "release:notes": "node scripts/create-github-releases.mjs",
     "prepack": "npm run check && npm run smoke"
   },
   "dependencies": {
@@ -57,11 +59,7 @@
   "devDependencies": {
     "@deepseek-ai/dsh-session-format-v3-to-v4": "0.2.0-rc.2",
     "@types/node": "^22.13.0",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
     "esbuild": "^0.25.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "typescript": "^5.4.0",
     "vitest": "^1.4.0"
   },
@@ -76,29 +74,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-api-remotes"
-      ]
     }
   },
   "qilin": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-api-remotes"
-      ]
     }
   }
 }
