@@ -1,10 +1,4 @@
 /**
- * kylin-memory
- *
- * By: adoresever
- * Email: Wywelljob@gmail.com
- */
-/**
  * Embedding 服务
  *
  * 可选模块：配了 embedding.apiKey 才启用，否则返回 null → 降级 FTS5

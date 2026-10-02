@@ -1,8 +1,6 @@
 /**
  * kylin-memory — 图谱维护
  *
- * By: adoresever
- * Email: Wywelljob@gmail.com
  *
  * 调用时机：session_end
  *

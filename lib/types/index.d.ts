@@ -73,6 +73,18 @@ interface DshContext {
             }>;
         };
     };
+    /** Web panel RPC surface. Present on the DSH/QiLin web profile; the adapter
+     * registers the `/dsh-kylin-memory` channel through it (rpc.ts). */
+    webServer?: {
+        register(options: {
+            kind: string;
+            path: string;
+            handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void;
+        }): unknown;
+    };
+    connection?: {
+        requestRejection(req: unknown): number | undefined;
+    };
     on(event: string, listener: (...args: any[]) => any, options?: Record<string, unknown>): () => void;
     effect(register: () => (() => void | Promise<void>), label?: string): () => void;
 }

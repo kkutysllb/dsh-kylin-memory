@@ -1,4 +1,5 @@
 import { DatabaseSync, type DatabaseSyncInstance } from "./sqlite.ts";
+import type { SQLInputValue } from "node:sqlite";
 import { createHash } from "crypto";
 import type {
   KmNode,
@@ -1305,4 +1306,128 @@ export function communityRepresentatives(db: DatabaseSyncInstance, perCommunity 
     result.push(...nodes);
   }
   return result;
+}
+
+// ─── 显式遗忘：按会话或单条删除轮次记忆及其派生导航 ──────────
+
+/**
+ * Deletion counts reported by forgetTurnMemories(). navigationTerms counts
+ * orphaned terms reclaimed because no surviving triple references them.
+ */
+export interface ForgetCounts {
+  turnMemories: number;
+  messages: number;
+  navigationTriples: number;
+  navigationTerms: number;
+  extractionSessions: number;
+}
+
+/**
+ * Forget turn memories either for a whole session or one memory id (exactly
+ * one scope). Turn-memory deletion cascades to sources, vectors and triples;
+ * raw messages go with the session scope, or with a single memory when no
+ * surviving memory still cites them. Navigation terms are reclaimed only when
+ * orphaned, so shared entities survive. Node records authored via km_record
+ * are never touched here.
+ */
+export function forgetTurnMemories(
+  db: DatabaseSyncInstance,
+  scope: { sessionId?: string; memoryId?: string },
+  options: { dryRun?: boolean } = {},
+): ForgetCounts {
+  const sessionId = typeof scope.sessionId === "string" ? scope.sessionId.trim() : "";
+  const memoryId = typeof scope.memoryId === "string" ? scope.memoryId.trim() : "";
+  if (Boolean(sessionId) === Boolean(memoryId)) {
+    throw new TypeError("forget requires exactly one of sessionId or memoryId");
+  }
+
+  const count = (sql: string, ...params: SQLInputValue[]): number =>
+    Number((db.prepare(sql).get(...params) as { c: number } | undefined)?.c ?? 0);
+
+  const counts: ForgetCounts = {
+    turnMemories: 0,
+    messages: 0,
+    navigationTriples: 0,
+    navigationTerms: 0,
+    extractionSessions: 0,
+  };
+  if (sessionId) {
+    counts.turnMemories = count("SELECT COUNT(*) AS c FROM km_turn_memories WHERE session_id = ?", sessionId);
+    counts.messages = count("SELECT COUNT(*) AS c FROM km_messages WHERE session_id = ?", sessionId);
+    counts.navigationTriples = count("SELECT COUNT(*) AS c FROM km_navigation_triples WHERE session_id = ?", sessionId);
+    counts.extractionSessions = count("SELECT COUNT(*) AS c FROM km_extraction_sessions WHERE session_id = ?", sessionId);
+  } else {
+    counts.turnMemories = count("SELECT COUNT(*) AS c FROM km_turn_memories WHERE id = ?", memoryId);
+    counts.messages = count(
+      `SELECT COUNT(*) AS c FROM km_messages
+       WHERE id IN (SELECT message_id FROM km_turn_memory_sources WHERE memory_id = ?)`,
+      memoryId,
+    );
+    counts.navigationTriples = count("SELECT COUNT(*) AS c FROM km_navigation_triples WHERE memory_id = ?", memoryId);
+  }
+  if (options.dryRun) return counts;
+
+  db.exec("BEGIN");
+  try {
+    if (sessionId) {
+      db.prepare("DELETE FROM km_turn_memories WHERE session_id = ?").run(sessionId);
+      const messages = db.prepare("DELETE FROM km_messages WHERE session_id = ?").run(sessionId);
+      counts.messages = Number(messages.changes);
+      db.prepare("DELETE FROM km_extraction_sessions WHERE session_id = ?").run(sessionId);
+    } else {
+      // Capture the cited messages before the cascade removes the source rows,
+      // then delete only the ones no surviving memory still references.
+      const cited = (db.prepare(
+        "SELECT message_id FROM km_turn_memory_sources WHERE memory_id = ?",
+      ).all(memoryId) as Array<{ message_id: string }>).map(row => row.message_id);
+      db.prepare("DELETE FROM km_turn_memories WHERE id = ?").run(memoryId);
+      let deletedMessages = 0;
+      const orphanMessage = db.prepare(
+        "DELETE FROM km_messages WHERE id = ? AND id NOT IN (SELECT message_id FROM km_turn_memory_sources)",
+      );
+      for (const id of cited) {
+        deletedMessages += Number(orphanMessage.run(id).changes);
+      }
+      counts.messages = deletedMessages;
+    }
+    counts.navigationTerms = Number(db.prepare(`
+      DELETE FROM km_navigation_terms
+      WHERE id NOT IN (SELECT subject_id FROM km_navigation_triples)
+        AND id NOT IN (SELECT object_id FROM km_navigation_triples)
+    `).run().changes);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return counts;
+}
+
+/**
+ * Newest-first turn memory listing for the web panel. Cross-session by
+ * default; sessionId narrows to one session. Bounded by limit/offset.
+ */
+export function listTurnMemories(
+  db: DatabaseSyncInstance,
+  options: { sessionId?: string; limit?: number; offset?: number } = {},
+): {
+  memories: Array<Pick<KmTurnMemory, "id" | "sessionId" | "summary" | "outcome" | "createdAt" | "updatedAt">>;
+  total: number;
+} {
+  const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? 50)));
+  const offset = Math.max(0, Math.floor(options.offset ?? 0));
+  const sessionId = options.sessionId?.trim();
+  const where = sessionId ? "WHERE session_id = ?" : "";
+  const params: SQLInputValue[] = sessionId ? [sessionId] : [];
+  const rows = db.prepare(
+    `SELECT id, session_id AS sessionId, summary, outcome, created_at AS createdAt, updated_at AS updatedAt
+     FROM km_turn_memories ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
+  ).all(...params, limit, offset) as Array<{
+    id: string; sessionId: string; summary: string; outcome: KmTurnMemory["outcome"];
+    createdAt: number; updatedAt: number;
+  }>;
+  const total = Number(
+    (db.prepare(`SELECT COUNT(*) AS c FROM km_turn_memories ${where}`).get(...params) as { c: number }).c,
+  );
+  return { memories: rows, total };
 }

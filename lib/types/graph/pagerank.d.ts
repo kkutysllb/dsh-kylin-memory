@@ -1,8 +1,6 @@
 /**
  * kylin-memory — Personalized PageRank (PPR)
  *
- * By: adoresever
- * Email: Wywelljob@gmail.com
  *
  * ═══════════════════════════════════════════════════════════════
  * 个性化 PageRank（Personalized PageRank）

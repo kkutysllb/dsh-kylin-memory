@@ -1,9 +1,3 @@
-/**
- * kylin-memory
- *
- * By: adoresever
- * Email: Wywelljob@gmail.com
- */
 import { type DatabaseSyncInstance } from "./sqlite.ts";
 import type { KmNode, KmEdge, KmNavigationTriple, KmTurnMemory, EdgeType, NodeTemporal, NodeType, TurnOutcome } from "../types.ts";
 export declare function findByName(db: DatabaseSyncInstance, name: string): KmNode | null;
@@ -209,3 +203,40 @@ export declare function vectorSearch(db: DatabaseSyncInstance, queryVec: number[
  * 用于泛化召回 —— 用户问"做了哪些工作"时按领域返回概览
  */
 export declare function communityRepresentatives(db: DatabaseSyncInstance, perCommunity?: number): KmNode[];
+/**
+ * Deletion counts reported by forgetTurnMemories(). navigationTerms counts
+ * orphaned terms reclaimed because no surviving triple references them.
+ */
+export interface ForgetCounts {
+    turnMemories: number;
+    messages: number;
+    navigationTriples: number;
+    navigationTerms: number;
+    extractionSessions: number;
+}
+/**
+ * Forget turn memories either for a whole session or one memory id (exactly
+ * one scope). Turn-memory deletion cascades to sources, vectors and triples;
+ * raw messages go with the session scope, or with a single memory when no
+ * surviving memory still cites them. Navigation terms are reclaimed only when
+ * orphaned, so shared entities survive. Node records authored via km_record
+ * are never touched here.
+ */
+export declare function forgetTurnMemories(db: DatabaseSyncInstance, scope: {
+    sessionId?: string;
+    memoryId?: string;
+}, options?: {
+    dryRun?: boolean;
+}): ForgetCounts;
+/**
+ * Newest-first turn memory listing for the web panel. Cross-session by
+ * default; sessionId narrows to one session. Bounded by limit/offset.
+ */
+export declare function listTurnMemories(db: DatabaseSyncInstance, options?: {
+    sessionId?: string;
+    limit?: number;
+    offset?: number;
+}): {
+    memories: Array<Pick<KmTurnMemory, "id" | "sessionId" | "summary" | "outcome" | "createdAt" | "updatedAt">>;
+    total: number;
+};

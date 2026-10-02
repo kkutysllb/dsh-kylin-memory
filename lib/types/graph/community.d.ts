@@ -1,10 +1,4 @@
 /**
- * kylin-memory
- *
- * By: adoresever
- * Email: Wywelljob@gmail.com
- */
-/**
  * 社区检测 — Label Propagation Algorithm
  *
  * 原理：每个节点初始自成一个社区，迭代中每个节点采纳邻居中最频繁的社区标签。

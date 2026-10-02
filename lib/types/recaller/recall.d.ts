@@ -1,8 +1,6 @@
 /**
  * kylin-memory — 跨对话召回
  *
- * By: adoresever
- * Email: Wywelljob@gmail.com
  *
  * Query recall is deliberately relevance-first: vector ranking is preserved,
  * with FTS5 as an exact-term/failure fallback. Graph centrality is useful for

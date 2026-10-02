@@ -1,9 +1,3 @@
-/**
- * kylin-memory
- *
- * By: adoresever
- * Email: Wywelljob@gmail.com
- */
 import { type DatabaseSyncInstance } from "./sqlite.ts";
 export interface DatabaseOptions {
     /** Maximum wait for another connection's write lock. Zero explicitly opts out. */

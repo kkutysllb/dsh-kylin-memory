@@ -1,9 +1,3 @@
-/**
- * kylin-memory
- *
- * By: adoresever
- * Email: Wywelljob@gmail.com
- */
 import type { KmConfig, ExtractionResult, KmTurnMemory } from "../types.ts";
 import type { CompleteFn } from "../types.ts";
 /** Read only visible text from a host message already selected as a Q/A pair. */

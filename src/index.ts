@@ -30,6 +30,8 @@ import {
   quarantineMessages,
   recordExtractionFailure,
   requeueQuarantined,
+  forgetTurnMemories,
+  listTurnMemories,
   saveMessageOnce,
   updateNode,
   upsertNode,
@@ -60,6 +62,7 @@ import {
 import { createEmbedFn } from "./engine/embed.ts";
 import { computeGlobalPageRank, invalidateGraphCache } from "./graph/pagerank.ts";
 import { detectCommunities, detectNavigationCommunities } from "./graph/community.ts";
+import { registerMemoryRpc, type MemoryRpcDeps } from "./rpc.ts";
 import { DEFAULT_CONFIG, type KmConfig, type NodeType } from "./types.ts";
 import {
   messageRetentionPolicyRevision,
@@ -141,6 +144,18 @@ interface DshContext {
   get?(name: string): any;
   tokenMeter?: {
     measure(session: unknown): { nodes: ReadonlyArray<{ seq: number; heuristicTokens: number }> };
+  };
+  /** Web panel RPC surface. Present on the DSH/QiLin web profile; the adapter
+   * registers the `/dsh-kylin-memory` channel through it (rpc.ts). */
+  webServer?: {
+    register(options: {
+      kind: string;
+      path: string;
+      handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void;
+    }): unknown;
+  };
+  connection?: {
+    requestRejection(req: unknown): number | undefined;
   };
   on(event: string, listener: (...args: any[]) => any, options?: Record<string, unknown>): () => void;
   effect(register: () => (() => void | Promise<void>), label?: string): () => void;
@@ -1024,6 +1039,107 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       return `Requeued ${requeued} quarantined messages; scheduled ${scheduled} sessions.`;
     },
   });
+
+  registerAssistantTool({
+    name: "km_forget",
+    description: "Delete Kylin Memory turn memories for one session (or one memory id) together with their derived navigation data. Destructive; use dryRun to preview counts.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Forget every memory, raw message and extraction watermark of this session" },
+        memoryId: { type: "string", description: "Forget a single turn memory by id" },
+        dryRun: { type: "boolean", description: "Report deletion counts without deleting" },
+      },
+      additionalProperties: false,
+    },
+    output: stringOutput("Kylin Memory forget"),
+    execute: async (args: any = {}) => {
+      const requestedSession = typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+      const memoryId = typeof args.memoryId === "string" ? args.memoryId.trim() : "";
+      if (Boolean(requestedSession) === Boolean(memoryId)) {
+        return "km_forget requires exactly one of sessionId or memoryId.";
+      }
+      // Stored session ids use the keyed form; accept the raw host id too.
+      const sessionRowExists = (id: string): boolean =>
+        Boolean(db.prepare("SELECT 1 AS x FROM km_messages WHERE session_id = ? LIMIT 1").get(id));
+      const keyed = sessionKey(requestedSession || "");
+      const sessionId = requestedSession
+        ? (sessionRowExists(requestedSession) ? requestedSession : keyed)
+        : "";
+      const counts = forgetTurnMemories(db, { sessionId, memoryId }, { dryRun: Boolean(args.dryRun) });
+      if (!args.dryRun && counts.turnMemories > 0) {
+        // Orphaned terms change the navigation graph; PPR must not serve a
+        // stale cached adjacency for the next recall.
+        invalidateGraphCache(db);
+      }
+      const scope = memoryId ? `memory ${memoryId}` : `session ${sessionId}`;
+      return `Kylin Memory forget${args.dryRun ? " (dry run)" : ""} for ${scope}: `
+        + `turnMemories=${counts.turnMemories}, messages=${counts.messages}, `
+        + `navigationTriples=${counts.navigationTriples}, termsReclaimed=${counts.navigationTerms}, `
+        + `extractionWatermarks=${counts.extractionSessions}.`;
+    },
+  });
+
+  // ── web panel RPC (`/dsh-kylin-memory`) ────────────────────────────────
+  // The panel is an optional surface: webServer/connection resolve via
+  // dynamic sub-world injection so headless/minimal profiles keep every
+  // memory feature, and the channel registers (and disposes) automatically
+  // whenever the web stack appears or goes away.
+  const rpcDeps: MemoryRpcDeps = {
+    overview: () => {
+      const stats = getStats(db);
+      const extraction = getExtractionStats(db);
+      const messageCount = Number((db.prepare("SELECT COUNT(*) AS count FROM km_messages").get() as any)?.count ?? 0);
+      const turnVectorCount = Number((db.prepare("SELECT COUNT(*) AS count FROM km_turn_vectors").get() as any)?.count ?? 0);
+      return {
+        dbPath: config.dbPath,
+        turnMemories: stats.turnMemories,
+        navigationTerms: stats.navigationTerms,
+        navigationTriples: stats.navigationTriples,
+        navigationCommunities: stats.navigationCommunities,
+        legacyNodes: stats.totalNodes,
+        legacyEdges: stats.totalEdges,
+        messages: messageCount,
+        extraction: {
+          pending: extraction.pending,
+          succeeded: extraction.succeeded,
+          quarantined: extraction.quarantined,
+        },
+        recallEnabled,
+        embeddingState,
+        turnVectors: turnVectorCount,
+        retention: {
+          keep: messageRetention.keep,
+          recentTurns: messageRetention.recentTurns,
+          retentionDays: messageRetention.retentionDays,
+        },
+      };
+    },
+    listMemories: (params) => listTurnMemories(db, params),
+    forget: async (params) => {
+      const counts = forgetTurnMemories(
+        db,
+        { sessionId: params.sessionId, memoryId: params.memoryId },
+        { dryRun: params.dryRun },
+      );
+      if (!params.dryRun && counts.turnMemories > 0) {
+        invalidateGraphCache(db);
+      }
+      return counts;
+    },
+  };
+  try {
+    const dynamicInject = (ctx as { inject?: (deps: string[], cb: (scoped: unknown) => void) => void }).inject;
+    if (typeof dynamicInject === "function") {
+      dynamicInject.call(ctx, ["webServer", "connection"], (scoped) => {
+        registerMemoryRpc(scoped as never, rpcDeps);
+      });
+    } else if (ctx.webServer && ctx.connection) {
+      registerMemoryRpc(ctx as never, rpcDeps);
+    }
+  } catch (error) {
+    ctx.logger.warn(`[kylin-memory] web panel RPC unavailable: ${String(error)}`);
+  }
 
   ctx.effect(() => async () => {
     closing = true;

@@ -1,9 +1,3 @@
-/**
- * kylin-memory
- *
- * By: adoresever
- * Email: Wywelljob@gmail.com
- */
 import { type DatabaseSyncInstance } from "../store/sqlite.ts";
 import type { KmNode, KmEdge, KmNavigationTriple, KmTurnMemory } from "../types.ts";
 /**

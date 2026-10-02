@@ -1,10 +1,4 @@
 /**
- * kylin-memory
- *
- * By: adoresever
- * Email: Wywelljob@gmail.com
- */
-/**
  * kylin-memory 类型定义
  *
  * 节点：TASK / SKILL / EVENT
