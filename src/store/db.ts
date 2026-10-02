@@ -103,6 +103,8 @@ export function migrate(db: DatabaseSyncInstance): void {
     m17_triple_invalidation,
     m18_turn_memories_fts,
     m19_workspace_scope,
+    m20_term_aliases,
+    m21_deletion_journal,
   ];
   for (let i = cur; i < steps.length; i++) {
     steps[i](db);
@@ -610,4 +612,39 @@ function m19_workspace_scope(db: DatabaseSyncInstance): void {
     }
   }
   db.exec("CREATE INDEX IF NOT EXISTS ix_km_turn_memories_workspace ON km_turn_memories(workspace_id)");
+}
+
+// ─── 实体归一化 v1：别名间接层（不改写历史 triple）──────────────
+
+function m20_term_aliases(db: DatabaseSyncInstance): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS km_term_aliases (
+      term_id           TEXT PRIMARY KEY REFERENCES km_navigation_terms(id) ON DELETE CASCADE,
+      canonical_term_id TEXT NOT NULL REFERENCES km_navigation_terms(id) ON DELETE CASCADE,
+      created_at        INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS km_term_vectors (
+      term_id      TEXT PRIMARY KEY REFERENCES km_navigation_terms(id) ON DELETE CASCADE,
+      content_hash TEXT NOT NULL,
+      embedding    BLOB NOT NULL
+    );
+  `);
+}
+
+// ─── 删除审计：遗忘操作先落日志再删数据 ──────────────────────────
+
+function m21_deletion_journal(db: DatabaseSyncInstance): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS km_deletion_journal (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      memory_id    TEXT NOT NULL,
+      session_id   TEXT NOT NULL,
+      summary      TEXT NOT NULL,
+      outcome      TEXT NOT NULL,
+      source_ids   TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      deleted_by   TEXT NOT NULL,
+      deleted_at   INTEGER NOT NULL
+    );
+  `);
 }

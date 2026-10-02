@@ -92,6 +92,8 @@ export interface MemoryListPayload {
 export interface MemoryRpcDeps {
   overview(): MemoryOverviewPayload;
   listMemories(params: { sessionId?: string; workspaceId?: string; limit: number; offset: number }): MemoryListPayload;
+  /** Read-only alias-group audit for entity normalization (M4). */
+  aliasGroups(): Array<{ canonical: string; aliases: string[] }>;
   forget(params: { sessionId?: string; memoryId?: string; dryRun: boolean }): Promise<ForgetCounts>;
 }
 
@@ -216,6 +218,9 @@ export async function handleMemoryRpc(
         limit: boundedNumber(body.limit, "limit", 1, 200, 50),
         offset: boundedNumber(body.offset, "offset", 0, 1_000_000, 0),
       }));
+    }
+    if (endpoint === "termAliases") {
+      return ok(deps.aliasGroups());
     }
     if (endpoint === "forget") {
       const sessionId = optionalString(body.sessionId, "sessionId");

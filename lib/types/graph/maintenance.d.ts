@@ -21,3 +21,14 @@ export interface MaintenanceResult {
     durationMs: number;
 }
 export declare function runMaintenance(db: DatabaseSyncInstance, cfg: KmConfig): Promise<MaintenanceResult>;
+/**
+ * Cluster navigation terms whose display texts embed near-identically and
+ * record the groups as alias rows (term_id → canonical_term_id). Triples are
+ * never rewritten; recall expands seeds through the alias layer instead.
+ * Deterministic: representatives are chosen by (longest display, then id).
+ * Full rebuild per run — idempotent and self-healing after deletes.
+ */
+export declare function mergeAliasTerms(db: DatabaseSyncInstance, embed: (text: string, kind: "db") => Promise<number[]>): Promise<{
+    merged: number;
+    groups: number;
+}>;

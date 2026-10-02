@@ -25,6 +25,7 @@ const deps: MemoryRpcDeps = {
     }],
     total: 1,
   }),
+  aliasGroups: () => [],
   forget: async (params) => ({
     turnMemories: 1,
     messages: params.dryRun ? 0 : 2,

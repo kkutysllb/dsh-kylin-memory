@@ -33,6 +33,7 @@ import {
   forgetTurnMemories,
   listTurnMemories,
   supersedeConflictingTriples,
+  allTurnMemories,
   saveMessageOnce,
   updateNode,
   upsertNode,
@@ -63,6 +64,7 @@ import {
 import { createEmbedFn } from "./engine/embed.ts";
 import { computeGlobalPageRank, invalidateGraphCache } from "./graph/pagerank.ts";
 import { detectCommunities, detectNavigationCommunities } from "./graph/community.ts";
+import { mergeAliasTerms } from "./graph/maintenance.ts";
 import { registerMemoryRpc, type MemoryRpcDeps } from "./rpc.ts";
 import { DEFAULT_CONFIG, type KmConfig, type NodeType } from "./types.ts";
 import {
@@ -385,22 +387,42 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
     last: undefined as MessageRetentionResult | undefined,
   };
 
+  // A temporary provider outage must not disable semantic recall for the
+  // process lifetime: a degraded probe re-runs every five minutes until the
+  // provider answers. Startup sync is incremental — syncEmbed/syncTurnMemory
+  // skip rows whose content hash already matches the embedding fingerprint.
+  let embeddingProbeTimer: ReturnType<typeof setInterval> | undefined;
+  let activeEmbed: ((text: string, kind: "db" | "query") => Promise<number[]>) | undefined;
+  async function startEmbedding(): Promise<void> {
+    const embed = await createEmbedFn(embedding).catch(() => undefined);
+    if (closing) return;
+    if (!embed) {
+      embeddingState = "degraded";
+      ctx.logger.warn("[kylin-memory] embedding unavailable; lexical recall active (re-probing every 5m)");
+      embeddingProbeTimer ??= setInterval(() => { void startEmbedding(); }, 5 * 60_000);
+      embeddingProbeTimer.unref?.();
+      return;
+    }
+    if (embeddingProbeTimer) {
+      clearInterval(embeddingProbeTimer);
+      embeddingProbeTimer = undefined;
+    }
+    const fingerprint = [input.embedding?.baseURL ?? input.embedding?.baseUrl ?? "openai", input.embedding?.model ?? "default", input.embedding?.dimensions ?? "default"].join("|");
+    recaller.setEmbedFn(embed, fingerprint);
+    activeEmbed = embed;
+    embeddingState = "vector-ready";
+    for (const node of allActiveNodes(db)) {
+      if (closing) return;
+      await recaller.syncEmbed(node);
+    }
+    for (const memory of allTurnMemories(db)) {
+      if (closing) return;
+      await recaller.syncTurnMemoryEmbed(memory);
+    }
+    ctx.logger.info("[kylin-memory] vector recall ready");
+  }
   const embeddingReady: Promise<void> = embeddingConfigured
-    ? createEmbedFn(embedding).then(async (embed) => {
-      if (embed && !closing) {
-        const fingerprint = [input.embedding?.baseURL ?? input.embedding?.baseUrl ?? "openai", input.embedding?.model ?? "default", input.embedding?.dimensions ?? "default"].join("|");
-        recaller.setEmbedFn(embed, fingerprint);
-        embeddingState = "vector-ready";
-        for (const node of allActiveNodes(db)) {
-          if (closing) break;
-          await recaller.syncEmbed(node);
-        }
-        ctx.logger.info("[kylin-memory] DSH vector recall ready");
-      } else if (!closing) {
-        embeddingState = "degraded";
-        ctx.logger.warn("[kylin-memory] DSH embedding unavailable; using FTS5 recall");
-      }
-    }).catch((error) => {
+    ? startEmbedding().catch((error) => {
       embeddingState = "degraded";
       ctx.logger.warn(`[kylin-memory] DSH embedding disabled: ${String(error)}`);
     })
@@ -676,6 +698,19 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
   }
 
   function runGraphMaintenance(): { pagerankNodes: number; communities: number } {
+    // Entity normalization v1: cluster near-identical navigation terms into
+    // alias groups before re-ranking. Zero LLM calls; embedding only.
+    if (activeEmbed) {
+      mergeAliasTerms(db, activeEmbed)
+        .then((alias) => {
+          if (alias.merged > 0) {
+            ctx.logger.info(`[kylin-memory] aliased ${alias.merged} navigation terms into ${alias.groups} groups`);
+          }
+        })
+        .catch((error) => {
+          ctx.logger.warn(`[kylin-memory] term aliasing skipped: ${String(error)}`);
+        });
+    }
     invalidateGraphCache(db);
     const pagerank = computeGlobalPageRank(db, config);
     const communities = detectCommunities(db);
@@ -1158,6 +1193,22 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       };
     },
     listMemories: (params) => listTurnMemories(db, params),
+    aliasGroups: () => {
+      const rows = db.prepare(`
+        SELECT c.display_text AS canonical, t.display_text AS alias
+        FROM km_term_aliases a
+        JOIN km_navigation_terms t ON t.id = a.term_id
+        JOIN km_navigation_terms c ON c.id = a.canonical_term_id
+        ORDER BY c.display_text, t.display_text
+      `).all() as Array<{ canonical: string; alias: string }>;
+      const groups = new Map<string, string[]>();
+      for (const row of rows) {
+        const list = groups.get(row.canonical) ?? [];
+        list.push(row.alias);
+        groups.set(row.canonical, list);
+      }
+      return Array.from(groups, ([canonical, aliases]) => ({ canonical, aliases }));
+    },
     forget: async (params) => {
       const counts = forgetTurnMemories(
         db,
@@ -1193,6 +1244,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       controller.abort(new Error("[kylin-memory] extraction stopped with the DSH plugin"));
     }
     await Promise.allSettled([...extractChain.values()]);
+    if (embeddingProbeTimer) clearInterval(embeddingProbeTimer);
     latestRoute.clear();
     turnCounts.clear();
     pendingTurnProjections.clear();

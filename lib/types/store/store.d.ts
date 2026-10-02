@@ -231,6 +231,7 @@ export declare function forgetTurnMemories(db: DatabaseSyncInstance, scope: {
     memoryId?: string;
 }, options?: {
     dryRun?: boolean;
+    deletedBy?: string;
 }): ForgetCounts;
 /**
  * Newest-first turn memory listing for the web panel. Cross-session by
@@ -261,3 +262,11 @@ export declare function supersedeConflictingTriples(db: DatabaseSyncInstance, me
  * still be the best available context for the query.
  */
 export declare function filterSupersededTurnMemories(db: DatabaseSyncInstance, memoryIds: string[]): string[];
+/** Every turn memory (bounded by real usage; startup backfill only). */
+export declare function allTurnMemories(db: DatabaseSyncInstance): KmTurnMemory[];
+/**
+ * Expand matched seed terms through the alias layer (M4): a hit on any group
+ * member pulls in the canonical and every sibling, since triples keep
+ * referencing the original term ids.
+ */
+export declare function expandSeedTermIds(db: DatabaseSyncInstance, seedIds: string[]): string[];

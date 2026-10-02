@@ -24,10 +24,10 @@ Node.js 22.13+（使用内置 `node:sqlite`，安装期零原生构建）。
 
 ```bash
 # DSH 通道
-dsh plugin --profile web add github:kkutysllb/dsh-kylin-memory#v0.1.0   # npm 发布后可改用包名
+dsh plugin --profile web add github:kkutysllb/dsh-kylin-memory#v0.1.1   # npm 发布后可改用包名
 
 # QiLin/Kylin 通道
-qilin plugin --profile qilin add github:kkutysllb/dsh-kylin-memory#v0.1.0
+qilin plugin --profile qilin add github:kkutysllb/dsh-kylin-memory#v0.1.1
 ```
 
 本地开发：`link:` 前缀直装仓库目录（如 `qilin plugin --profile qilin add link:/Users/libing/kk_Projects/dsh-kylin-memory`），重启宿主生效。安装校验：`qilin plugin doctor dsh-kylin-memory` 应输出 `usable`。
@@ -68,11 +68,11 @@ export KYLIN_MEMORY_EMBEDDING_DIMENSIONS=1024
 
 完整变量表与契约层说明见 [docs/01-tech/0101-双通道适配与契约层.md](docs/01-tech/0101-双通道适配与契约层.md)。
 
-## 验证状态（v0.2.0）
+## 验证状态（v0.1.1）
 
-- 161/161 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物 387KB 自包含；GitHub Actions CI；
+- 161/161 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物自包含；GitHub Actions CI；
 - `qilin plugin doctor`：usable / no compatibility findings；
-- QiLin 3.0.8 与 DSH 0.2.0-rc.2 真实 web profile 安装 + 启动验证通过（数据库创建、16 个迁移完成）；
+- QiLin 3.0.8 与 DSH 0.2.0-rc.2 真实 web profile 安装 + 启动验证通过（21 个迁移完成）；
 - RPC 管理通道双宿主验证：`POST /dsh-kylin-memory/overview` 未登录返回 401（鉴权栅栏生效）；
 - 极简 profile（无 web 栈）验证：插件正常激活（RPC 通道为动态可选面）。
 

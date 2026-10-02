@@ -64,6 +64,11 @@ export interface MemoryRpcDeps {
         limit: number;
         offset: number;
     }): MemoryListPayload;
+    /** Read-only alias-group audit for entity normalization (M4). */
+    aliasGroups(): Array<{
+        canonical: string;
+        aliases: string[];
+    }>;
     forget(params: {
         sessionId?: string;
         memoryId?: string;

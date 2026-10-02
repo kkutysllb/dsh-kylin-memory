@@ -974,7 +974,7 @@ export function findNavigationSeedTermIds(
       }
     }
   }
-  return seeds;
+  return expandSeedTermIds(db, seeds);
 }
 
 /**
@@ -1384,7 +1384,7 @@ export interface ForgetCounts {
 export function forgetTurnMemories(
   db: DatabaseSyncInstance,
   scope: { sessionId?: string; memoryId?: string },
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; deletedBy?: string } = {},
 ): ForgetCounts {
   const sessionId = typeof scope.sessionId === "string" ? scope.sessionId.trim() : "";
   const memoryId = typeof scope.memoryId === "string" ? scope.memoryId.trim() : "";
@@ -1420,6 +1420,26 @@ export function forgetTurnMemories(
 
   db.exec("BEGIN");
   try {
+    // Deletion audit (C5): capture what is about to be destroyed before the
+    // cascade removes it, so forget stays reversible by a human operator.
+    if (!sessionId || true) {
+      const doomed = (db.prepare(`
+        SELECT m.id, m.session_id, m.summary, m.outcome, m.workspace_id,
+               (SELECT json_group_array(message_id) FROM km_turn_memory_sources s WHERE s.memory_id = m.id) AS source_ids
+        FROM km_turn_memories m
+        WHERE (?1 IS NOT NULL AND m.session_id = ?1) OR (?2 IS NOT NULL AND m.id = ?2)
+      `).all(sessionId ?? null, memoryId ?? null) as Array<{
+        id: string; session_id: string; summary: string; outcome: string; workspace_id: string; source_ids: string;
+      }>);
+      const journal = db.prepare(`
+        INSERT INTO km_deletion_journal
+          (memory_id, session_id, summary, outcome, source_ids, workspace_id, deleted_by, deleted_at)
+        VALUES (?,?,?,?,?,?,?,?)
+      `);
+      for (const row of doomed) {
+        journal.run(row.id, row.session_id, row.summary, row.outcome, row.source_ids, row.workspace_id, options.deletedBy ?? "km_forget", Date.now());
+      }
+    }
     // Remember which memories are being deleted: any invalidation they caused
     // must be rolled back so superseded facts become recallable again.
     const deletedIds: string[] = sessionId
@@ -1461,6 +1481,13 @@ export function forgetTurnMemories(
       WHERE id NOT IN (SELECT subject_id FROM km_navigation_triples)
         AND id NOT IN (SELECT object_id FROM km_navigation_triples)
     `).run().changes);
+    // A deleted canonical or member leaves dangling alias rows; the next
+    // maintenance pass re-derives them from scratch.
+    db.prepare(`
+      DELETE FROM km_term_aliases
+      WHERE term_id NOT IN (SELECT id FROM km_navigation_terms)
+         OR canonical_term_id NOT IN (SELECT id FROM km_navigation_terms)
+    `).run();
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -1586,4 +1613,30 @@ export function filterSupersededTurnMemories(db: DatabaseSyncInstance, memoryIds
   if (rows.length === 0) return memoryIds;
   const superseded = new Set(rows.map(row => row.memory_id));
   return memoryIds.filter(id => !superseded.has(id));
+}
+
+/** Every turn memory (bounded by real usage; startup backfill only). */
+export function allTurnMemories(db: DatabaseSyncInstance): KmTurnMemory[] {
+  const rows = db.prepare("SELECT * FROM km_turn_memories ORDER BY created_at").all() as any[];
+  return rows.map(row => toTurnMemory(db, row));
+}
+
+/**
+ * Expand matched seed terms through the alias layer (M4): a hit on any group
+ * member pulls in the canonical and every sibling, since triples keep
+ * referencing the original term ids.
+ */
+export function expandSeedTermIds(db: DatabaseSyncInstance, seedIds: string[]): string[] {
+  if (!seedIds.length) return seedIds;
+  const placeholders = seedIds.map(() => "?").join(", ");
+  const rows = db.prepare(`
+    SELECT term_id AS id FROM km_term_aliases WHERE canonical_term_id IN (${placeholders})
+    UNION
+    SELECT canonical_term_id AS id FROM km_term_aliases WHERE term_id IN (${placeholders})
+    UNION
+    SELECT canonical_term_id AS id FROM km_term_aliases WHERE canonical_term_id IN (${placeholders})
+  `).all(...seedIds, ...seedIds, ...seedIds) as Array<{ id: string }>;
+  const merged = new Set(seedIds);
+  for (const row of rows) merged.add(row.id);
+  return [...merged];
 }
