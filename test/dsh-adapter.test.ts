@@ -23,7 +23,7 @@ function user(seq: number) {
 }
 
 describe("native DSH context takeover", () => {
-  it("adds no assistant tool schema by default", async () => {
+  it("exposes km_search by default and nothing else", async () => {
     const tools: string[] = [];
     const cleanups: Array<() => void | Promise<void>> = [];
     apply({
@@ -34,6 +34,21 @@ describe("native DSH context takeover", () => {
       on() { return () => {}; },
       effect(register: () => () => void | Promise<void>) { cleanups.push(register()); return () => {}; },
     } as any, { dbPath: ":memory:", extractionEnabled: false, recallEnabled: false });
+    expect(tools).toEqual(["km_search"]);
+    await Promise.all(cleanups.map(cleanup => cleanup()));
+  });
+
+  it("adds no assistant tool schema under assistantTools none", async () => {
+    const tools: string[] = [];
+    const cleanups: Array<() => void | Promise<void>> = [];
+    apply({
+      logger: { info() {}, warn() {}, error() {} },
+      llm: { async *stream() {} },
+      tools: { register(definition: any) { tools.push(definition.name); return () => {}; } },
+      credentials: { async resolve() { return undefined; } },
+      on() { return () => {}; },
+      effect(register: () => () => void | Promise<void>) { cleanups.push(register()); return () => {}; },
+    } as any, { dbPath: ":memory:", extractionEnabled: false, recallEnabled: false, assistantTools: "none" });
     expect(tools).toEqual([]);
     await Promise.all(cleanups.map(cleanup => cleanup()));
   });

@@ -472,11 +472,12 @@ export function saveMessageOnce(
   turn: number,
   role: string,
   content: unknown,
+  workspaceId?: string,
 ): boolean {
   const result = db.prepare(`INSERT OR IGNORE INTO km_messages
-    (id, session_id, turn_index, role, content, created_at)
-    VALUES (?,?,?,?,?,?)`)
-    .run(eventId, sid, turn, role, JSON.stringify(content), Date.now());
+    (id, session_id, turn_index, role, content, created_at, workspace_id)
+    VALUES (?,?,?,?,?,?,?)`)
+    .run(eventId, sid, turn, role, JSON.stringify(content), Date.now(), workspaceId ?? "default");
   return result.changes > 0;
 }
 
@@ -736,19 +737,20 @@ export function upsertTurnMemory(
     summary: string;
     outcome: TurnOutcome;
     sources: Array<{ messageId: string; turnIndex: number }>;
+    workspaceId?: string;
   },
 ): KmTurnMemory {
   if (!input.sources.length) throw new Error("turn memory requires at least one durable source message");
   const id = turnMemoryId(input.sessionId, input.sources);
   const now = Date.now();
   db.prepare(`
-    INSERT INTO km_turn_memories (id, session_id, summary, outcome, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO km_turn_memories (id, session_id, summary, outcome, created_at, updated_at, workspace_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       summary=excluded.summary,
       outcome=excluded.outcome,
       updated_at=excluded.updated_at
-  `).run(id, input.sessionId, input.summary, input.outcome, now, now);
+  `).run(id, input.sessionId, input.summary, input.outcome, now, now, input.workspaceId ?? "default");
   const link = db.prepare(`
     INSERT OR IGNORE INTO km_turn_memory_sources (memory_id, message_id, turn_index, source_order)
     SELECT ?, id, turn_index, ? FROM km_messages WHERE id=?
@@ -1013,7 +1015,7 @@ export function navigationCandidateTermIds(
 export function rankTurnMemoryIdsByNavigation(
   db: DatabaseSyncInstance,
   termScores: ReadonlyMap<string, number>,
-  options: { freshnessHalfLifeDays?: number } = {},
+  options: { freshnessHalfLifeDays?: number; workspaceId?: string } = {},
 ): string[] {
   if (!termScores.size) return [];
   // 0 (default) keeps historical behaviour: pure graph rank, no time bias.
@@ -1029,8 +1031,9 @@ export function rankTurnMemoryIdsByNavigation(
     SELECT t.memory_id, t.subject_id, t.object_id, m.created_at
     FROM km_navigation_triples t
     JOIN km_turn_memories m ON m.id = t.memory_id
+    ${options.workspaceId ? "WHERE m.workspace_id = ?" : ""}
     ORDER BY t.created_at, t.id
-  `).all() as Array<{ memory_id: string; subject_id: string; object_id: string; created_at: number }>;
+  `).all(...(options.workspaceId ? [options.workspaceId] : [])) as Array<{ memory_id: string; subject_id: string; object_id: string; created_at: number }>;
   for (const row of rows) {
     // Max endpoint relevance prevents a verbose turn with many triples from
     // outranking a concise turn solely because it emitted more graph edges;
@@ -1072,9 +1075,12 @@ export function searchTurnMemories(
   db: DatabaseSyncInstance,
   query: string,
   limit: number,
+  workspaceId?: string,
 ): KmTurnMemory[] {
   const phrase = query.trim().replace(/\s+/g, " ");
   if (!phrase) return [];
+  const workspaceFilter = workspaceId ? "AND m.workspace_id = ?" : "";
+  const workspaceParams: SQLInputValue[] = workspaceId ? [workspaceId] : [];
   // Trigram FTS5 (m18) is the primary lexical route: it handles CJK substring
   // matches like "端口 9090" ↔ "9090 端口" without a segmenter. Trigram needs
   // at least 3 characters; shorter queries and unavailable builds fall back to
@@ -1086,10 +1092,10 @@ export function searchTurnMemories(
       const rows = db.prepare(`
         SELECT m.* FROM km_turn_memories m
         JOIN km_turn_memories_fts f ON f.rowid = m.rowid
-        WHERE km_turn_memories_fts MATCH ?
+        WHERE km_turn_memories_fts MATCH ? ${workspaceFilter}
         ORDER BY m.updated_at DESC
         LIMIT ?
-      `).all(match, limit) as any[];
+      `).all(match, ...workspaceParams, limit) as any[];
       return rows.map(row => toTurnMemory(db, row));
     } catch {
       // Malformed match or a broken index must never break recall.
@@ -1097,10 +1103,10 @@ export function searchTurnMemories(
   }
   const rows = db.prepare(`
     SELECT * FROM km_turn_memories
-    WHERE summary LIKE ?
+    WHERE summary LIKE ? ${workspaceId ? "AND workspace_id = ?" : ""}
     ORDER BY updated_at DESC
     LIMIT ?
-  `).all(`%${phrase}%`, limit) as any[];
+  `).all(`%${phrase}%`, ...(workspaceId ? [workspaceId] : []), limit) as any[];
   return rows.map(row => toTurnMemory(db, row));
 }
 
@@ -1132,12 +1138,14 @@ export function turnMemoryVectorSearchWithScore(
   queryVec: number[],
   limit: number,
   minScore: number,
+  workspaceId?: string,
 ): ScoredTurnMemory[] {
   const rows = db.prepare(`
     SELECT v.embedding, m.*
     FROM km_turn_vectors v
     JOIN km_turn_memories m ON m.id=v.memory_id
-  `).all() as any[];
+    ${workspaceId ? "WHERE m.workspace_id = ?" : ""}
+  `).all(...(workspaceId ? [workspaceId] : [])) as any[];
   if (!rows.length) return [];
   const query = new Float32Array(queryVec);
   const queryNorm = vectorNorm(query);
@@ -1467,7 +1475,7 @@ export function forgetTurnMemories(
  */
 export function listTurnMemories(
   db: DatabaseSyncInstance,
-  options: { sessionId?: string; limit?: number; offset?: number } = {},
+  options: { sessionId?: string; workspaceId?: string; limit?: number; offset?: number } = {},
 ): {
   memories: Array<Pick<KmTurnMemory, "id" | "sessionId" | "summary" | "outcome" | "createdAt" | "updatedAt">>;
   total: number;
@@ -1475,8 +1483,12 @@ export function listTurnMemories(
   const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? 50)));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
   const sessionId = options.sessionId?.trim();
-  const where = sessionId ? "WHERE session_id = ?" : "";
-  const params: SQLInputValue[] = sessionId ? [sessionId] : [];
+  const workspaceId = options.workspaceId?.trim();
+  const conditions: string[] = [];
+  const params: SQLInputValue[] = [];
+  if (sessionId) { conditions.push("session_id = ?"); params.push(sessionId); }
+  if (workspaceId) { conditions.push("workspace_id = ?"); params.push(workspaceId); }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const rows = db.prepare(
     `SELECT id, session_id AS sessionId, summary, outcome, created_at AS createdAt, updated_at AS updatedAt
      FROM km_turn_memories ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`,

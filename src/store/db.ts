@@ -102,6 +102,7 @@ export function migrate(db: DatabaseSyncInstance): void {
     m16_navigation_triples,
     m17_triple_invalidation,
     m18_turn_memories_fts,
+    m19_workspace_scope,
   ];
   for (let i = cur; i < steps.length; i++) {
     steps[i](db);
@@ -593,4 +594,20 @@ function m18_turn_memories_fts(db: DatabaseSyncInstance): void {
   } catch {
     // trigram 分词器或 FTS5 不可用：词法路线继续走全短语 LIKE。
   }
+}
+
+// ─── 记忆作用域：workspace 维度的逻辑隔离（ recallScope 控制是否生效）──────
+
+function m19_workspace_scope(db: DatabaseSyncInstance): void {
+  for (const table of ["km_turn_memories", "km_messages", "km_navigation_triples"]) {
+    const columns = new Set(
+      (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name),
+    );
+    if (!columns.has("workspace_id")) {
+      // Backfill: everything written before scoping existed belongs to the
+      // implicit default workspace, keeping "all"-mode behaviour unchanged.
+      db.exec(`ALTER TABLE ${table} ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'`);
+    }
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS ix_km_turn_memories_workspace ON km_turn_memories(workspace_id)");
 }

@@ -42,11 +42,13 @@ qilin plugin --profile qilin add github:kkutysllb/dsh-kylin-memory#v0.1.0
 | 轻量抽取 | 只处理用户问题与最终回答；严格 TypeBox 工具合同；不摄入推理/工具轨迹 |
 | 查询优先召回 | 摘要向量 Top-K + 图路线（词项种子→社区→PPR）RRF 融合；无向量时 FTS5/短语降级 |
 | 持久记忆 | 本地 SQLite（WAL）、内容寻址幂等写入、跨轮次/跨会话/跨项目召回 |
+| 事实失效 | 同 (subject, predicate) 新值标记旧值（m17），召回自动剔除过期事实；km_forget 删除失效者可恢复 |
+| 作用域 | `recallScope: "all" \|"same-workspace"`，workspace 维度逻辑隔离（m19） |
 | 失败行为 | 合同错误隔离、路由错误待处理可重试；任何记忆子系统失败不阻塞前台对话 |
 | 管理通道 | 无 UI（对齐上游纯工具入口）；headless RPC 管理通道 `/dsh-kylin-memory` 供脚本/外部工具经宿主登录态调用 |
 | 宿主支持 | DSH 0.1.7+ / Session V4 与 QiLin 3.0+，同一份 bundle，`dsh`/`qilin` 双 manifest |
 
-工具：`km_status` / `km_search` / `km_record` / `km_stats` / `km_maintain` / `km_retry_extraction` / `km_forget`（默认不注册给助手，`assistantTools: "search"|"all"` 可开放）。
+工具：`km_status` / `km_search` / `km_record` / `km_stats` / `km_maintain` / `km_retry_extraction` / `km_forget`——默认开放 `km_search`（agent 可自主查记忆），`"none"` 恢复被动，`"all"` 开放管理工具。
 
 ## 配置
 
@@ -66,9 +68,9 @@ export KYLIN_MEMORY_EMBEDDING_DIMENSIONS=1024
 
 完整变量表与契约层说明见 [docs/01-tech/0101-双通道适配与契约层.md](docs/01-tech/0101-双通道适配与契约层.md)。
 
-## 验证状态（v0.1.0）
+## 验证状态（v0.2.0）
 
-- 145/145 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物 387KB 自包含；
+- 161/161 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物 387KB 自包含；GitHub Actions CI；
 - `qilin plugin doctor`：usable / no compatibility findings；
 - QiLin 3.0.8 与 DSH 0.2.0-rc.2 真实 web profile 安装 + 启动验证通过（数据库创建、16 个迁移完成）；
 - RPC 管理通道双宿主验证：`POST /dsh-kylin-memory/overview` 未登录返回 401（鉴权栅栏生效）；

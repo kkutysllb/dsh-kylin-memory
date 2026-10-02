@@ -118,6 +118,12 @@ export interface KmConfig {
     compactTurnCount: number;
     /** Maximum query-matched memory nodes returned by one recall. */
     recallMaxNodes: number;
+    /** Exponential freshness half-life (days) for navigation ranks. 0 disables
+     * time bias (historical behaviour). Typical: 14. */
+    freshnessHalfLifeDays: number;
+    /** Cross-workspace recall policy. "all" (default) keeps historical global
+     * behaviour; "same-workspace" restricts recall to the current workspace. */
+    recallScope: "all" | "same-workspace";
     /**
      * Provider-calibrated cosine floor for automatic prompt injection.
      * Deliberately required by DEFAULT_CONFIG: ranked top-k alone always returns

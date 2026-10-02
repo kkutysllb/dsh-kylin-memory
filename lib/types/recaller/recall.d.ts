@@ -17,7 +17,9 @@ export declare class Recaller {
     private embeddingFingerprint;
     constructor(db: DatabaseSyncInstance, cfg: KmConfig);
     setEmbedFn(fn: EmbedFn, fingerprint?: string): void;
-    recall(query: string): Promise<RecallResult>;
+    recall(query: string, options?: {
+        workspaceId?: string;
+    }): Promise<RecallResult>;
     /**
      * Fuse independent summary and graph ranks without mixing incomparable
      * cosine and PageRank score scales. A memory supported by both routes rises;

@@ -91,7 +91,7 @@ export interface MemoryListPayload {
 
 export interface MemoryRpcDeps {
   overview(): MemoryOverviewPayload;
-  listMemories(params: { sessionId?: string; limit: number; offset: number }): MemoryListPayload;
+  listMemories(params: { sessionId?: string; workspaceId?: string; limit: number; offset: number }): MemoryListPayload;
   forget(params: { sessionId?: string; memoryId?: string; dryRun: boolean }): Promise<ForgetCounts>;
 }
 
@@ -212,6 +212,7 @@ export async function handleMemoryRpc(
     if (endpoint === "memories") {
       return ok(deps.listMemories({
         sessionId: optionalString(body.sessionId, "sessionId"),
+        workspaceId: optionalString(body.workspaceId, "workspaceId"),
         limit: boundedNumber(body.limit, "limit", 1, 200, 50),
         offset: boundedNumber(body.offset, "offset", 0, 1_000_000, 0),
       }));

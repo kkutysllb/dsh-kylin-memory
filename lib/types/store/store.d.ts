@@ -73,7 +73,7 @@ export declare function saveMessage(db: DatabaseSyncInstance, sid: string, turn:
  * Host adapters use that identity instead of the legacy random id so replay,
  * resume and HMR backfill cannot duplicate a message.
  */
-export declare function saveMessageOnce(db: DatabaseSyncInstance, eventId: string, sid: string, turn: number, role: string, content: unknown): boolean;
+export declare function saveMessageOnce(db: DatabaseSyncInstance, eventId: string, sid: string, turn: number, role: string, content: unknown, workspaceId?: string): boolean;
 /**
  * Read the oldest pending completed turn as one semantic extraction job.
  * No character/message batching is involved: the DSH adapter persists exactly
@@ -120,6 +120,7 @@ export declare function upsertTurnMemory(db: DatabaseSyncInstance, input: {
         messageId: string;
         turnIndex: number;
     }>;
+    workspaceId?: string;
 }): KmTurnMemory;
 export declare function getTurnMemoriesByIds(db: DatabaseSyncInstance, ids: string[]): KmTurnMemory[];
 /**
@@ -152,18 +153,21 @@ export declare function findNavigationSeedTermIds(db: DatabaseSyncInstance, quer
  */
 export declare function navigationCandidateTermIds(db: DatabaseSyncInstance, seedIds: string[]): string[];
 /** Map query-local graph relevance back to the exact dialogue evidence. */
-export declare function rankTurnMemoryIdsByNavigation(db: DatabaseSyncInstance, termScores: ReadonlyMap<string, number>): string[];
+export declare function rankTurnMemoryIdsByNavigation(db: DatabaseSyncInstance, termScores: ReadonlyMap<string, number>, options?: {
+    freshnessHalfLifeDays?: number;
+    workspaceId?: string;
+}): string[];
 export declare function updateNavigationCommunities(db: DatabaseSyncInstance, labels: Map<string, string>): void;
 export declare function hasTurnMemories(db: DatabaseSyncInstance): boolean;
 /** Lexical fallback for hosts without a working embedding provider. */
-export declare function searchTurnMemories(db: DatabaseSyncInstance, query: string, limit: number): KmTurnMemory[];
+export declare function searchTurnMemories(db: DatabaseSyncInstance, query: string, limit: number, workspaceId?: string): KmTurnMemory[];
 export declare function saveTurnVector(db: DatabaseSyncInstance, memoryId: string, content: string, vec: number[]): void;
 export declare function getTurnVectorHash(db: DatabaseSyncInstance, memoryId: string): string | null;
 export type ScoredTurnMemory = {
     memory: KmTurnMemory;
     score: number;
 };
-export declare function turnMemoryVectorSearchWithScore(db: DatabaseSyncInstance, queryVec: number[], limit: number, minScore: number): ScoredTurnMemory[];
+export declare function turnMemoryVectorSearchWithScore(db: DatabaseSyncInstance, queryVec: number[], limit: number, minScore: number, workspaceId?: string): ScoredTurnMemory[];
 /** Resolve graph navigation nodes whose evidence belongs to matched turns. */
 export declare function nodesForTurnMemories(db: DatabaseSyncInstance, memoryIds: string[], limit: number): KmNode[];
 /** Read exact Q/A evidence for matched compact memories. */
@@ -234,9 +238,26 @@ export declare function forgetTurnMemories(db: DatabaseSyncInstance, scope: {
  */
 export declare function listTurnMemories(db: DatabaseSyncInstance, options?: {
     sessionId?: string;
+    workspaceId?: string;
     limit?: number;
     offset?: number;
 }): {
     memories: Array<Pick<KmTurnMemory, "id" | "sessionId" | "summary" | "outcome" | "createdAt" | "updatedAt">>;
     total: number;
 };
+/**
+ * Mark older triples invalidated by a freshly written memory: same normalized
+ * subject AND predicate with a different object means the world changed, so
+ * the older triple gets superseded_by=<new memory id> and the older memory's
+ * superseded_count is recomputed. Deliberately conservative — no semantic
+ * predicate matching, no summary-level guessing (documented v1 limit). Safe to
+ * re-run: updates are keyed by the invalidating memory id.
+ */
+export declare function supersedeConflictingTriples(db: DatabaseSyncInstance, memory: KmTurnMemory): void;
+/**
+ * Given candidate memory ids, drop the ones whose fact was explicitly
+ * invalidated by another candidate in the same set. An invalidated memory
+ * stays recallable when its invalidating memory is NOT recalled — it may
+ * still be the best available context for the query.
+ */
+export declare function filterSupersededTurnMemories(db: DatabaseSyncInstance, memoryIds: string[]): string[];

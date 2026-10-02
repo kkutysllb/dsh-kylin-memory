@@ -22,3 +22,4 @@ export declare function openDb(dbPath: string, options?: DatabaseOptions): Datab
 export declare function getDb(dbPath: string, options?: DatabaseOptions): DatabaseSyncInstance;
 /** 仅用于测试：关闭并重置单例 */
 export declare function closeDb(): void;
+export declare function migrate(db: DatabaseSyncInstance): void;

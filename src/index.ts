@@ -99,6 +99,9 @@ export interface Config {
   messageRetention?: MessageRetentionConfig;
   /** Keep this many newest real user turns as native question/final-answer endpoints on the DSH model surface. */
   freshTurnCount?: number;
+  /** Cross-workspace recall policy. "all" (default): global recall as before.
+   * "same-workspace": only recall memories captured in the current workspace. */
+  recallScope?: "all" | "same-workspace";
   /** Let Kylin Memory replace older model-surface history without an LLM call. */
   contextCompactionEnabled?: boolean;
   /** Hide completed-turn tool traces while retaining the native question and final answer. */
@@ -165,6 +168,22 @@ interface DshContext {
 const HOST = "dsh";
 function sessionKey(id: unknown): string {
   return `${HOST}:${String(id)}`;
+}
+
+/**
+ * Best-effort workspace identity for recall scoping. Hosts expose the agent's
+ * workspace through different shapes; anything unresolvable falls back to the
+ * implicit "default" workspace that owns all pre-scoping data.
+ */
+function resolveWorkspaceId(agent: unknown): string {
+  const candidate = agent as {
+    workspace?: { id?: unknown } | null;
+    workspaceId?: unknown;
+    session?: { workspace?: { id?: unknown } | null } | null;
+  } | undefined;
+  const value = candidate?.workspace?.id ?? candidate?.workspaceId ?? candidate?.session?.workspace?.id;
+  const id = typeof value === "string" && value.trim() ? value.trim() : "default";
+  return id;
 }
 
 function textBlocks(content: unknown): string {
@@ -260,9 +279,16 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
   if (!Number.isInteger(freshTurnCount) || freshTurnCount < 1) {
     throw new TypeError(`[kylin-memory] freshTurnCount must be a positive integer, received ${freshTurnCount}`);
   }
+  const recallScope = input.recallScope ?? DEFAULT_CONFIG.recallScope;
+  if (!["all", "same-workspace"].includes(recallScope)) {
+    throw new TypeError(`[kylin-memory] recallScope must be all or same-workspace, received ${String(recallScope)}`);
+  }
   const contextCompactionEnabled = input.contextCompactionEnabled ?? true;
   const projectCompletedTurnTools = input.projectCompletedTurnTools ?? true;
-  const assistantTools = input.assistantTools ?? "none";
+  // "search" by default: automatic recall stays the primary path, and the
+  // agent can additionally look memory up explicitly (Letta-style self-serve
+  // querying). "none" restores the fully passive surface.
+  const assistantTools = input.assistantTools ?? "search";
   if (!["search", "all", "none"].includes(assistantTools)) {
     throw new TypeError(`[kylin-memory] assistantTools must be search, all or none, received ${String(assistantTools)}`);
   }
@@ -310,6 +336,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
     dbPath: input.dbPath ?? resolveDefaultDbPath(),
     compactTurnCount: maintenanceInterval,
     recallMaxNodes,
+    recallScope,
     semanticScoreThreshold: input.semanticScoreThreshold ?? DEFAULT_CONFIG.semanticScoreThreshold,
     embedding,
   };
@@ -320,6 +347,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
   const latestRoute = new Map<string, Route>();
   const extractChain = new Map<string, Promise<void>>();
   const turnCounts = new Map<string, number>();
+  const workspaceBySession = new Map<string, string>();
   const embeddingConfigured = Boolean(
     input.embedding && (
       input.embedding.apiKeyEnv
@@ -459,6 +487,8 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
   }
 
   function captureCompletedTurn(session: any, turn: number, turnEndSeq: number): boolean {
+    const workspaceId = resolveWorkspaceId((session as unknown as { agent?: unknown }).agent);
+    workspaceBySession.set(sessionKey(session.id), workspaceId);
     const memory = projectDshCompletedTurnMemory(session, turn, turnEndSeq);
     if (!memory) return false;
     const sid = sessionKey(session.id);
@@ -469,6 +499,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       turn,
       "user",
       memory.userQuestion,
+      workspaceId,
     );
     const answerSaved = saveMessageOnce(
       db,
@@ -477,6 +508,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       turn,
       "assistant",
       memory.finalAnswer,
+      workspaceId,
     );
     markExtractionTurnCompleted(db, sid, turn);
     return questionSaved || answerSaved;
@@ -499,6 +531,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       sessionId: sid,
       summary: result.turn.summary,
       outcome: result.turn.outcome,
+      workspaceId: workspaceBySession.get(sid),
       // A turn capsule always points to the complete durable Q/A pair;
       // navigation triples link to this capsule rather than duplicating it.
       sources: messages.map(message => ({
@@ -783,7 +816,9 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       // is still in flight. Historical recall must wait for that shared probe;
       // otherwise the very first cross-session question can miss all vectors.
       await embeddingReady;
-      const recalled = await recaller.recall(query);
+      const recalled = await recaller.recall(query, {
+        workspaceId: resolveWorkspaceId(agent),
+      });
       signal?.throwIfAborted?.();
       const key = String(id);
       const currentSession = sessionKey(id);

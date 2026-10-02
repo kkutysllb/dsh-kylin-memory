@@ -24,6 +24,9 @@ export interface Config {
     messageRetention?: MessageRetentionConfig;
     /** Keep this many newest real user turns as native question/final-answer endpoints on the DSH model surface. */
     freshTurnCount?: number;
+    /** Cross-workspace recall policy. "all" (default): global recall as before.
+     * "same-workspace": only recall memories captured in the current workspace. */
+    recallScope?: "all" | "same-workspace";
     /** Let Kylin Memory replace older model-surface history without an LLM call. */
     contextCompactionEnabled?: boolean;
     /** Hide completed-turn tool traces while retaining the native question and final answer. */

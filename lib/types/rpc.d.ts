@@ -27,6 +27,7 @@ export interface MemoryOverviewPayload {
     navigationTerms: number;
     navigationTriples: number;
     navigationCommunities: number;
+    supersededTriples: number;
     legacyNodes: number;
     legacyEdges: number;
     messages: number;
@@ -59,6 +60,7 @@ export interface MemoryRpcDeps {
     overview(): MemoryOverviewPayload;
     listMemories(params: {
         sessionId?: string;
+        workspaceId?: string;
         limit: number;
         offset: number;
     }): MemoryListPayload;

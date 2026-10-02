@@ -9,9 +9,10 @@
     - id: dsh-kylin-memory
       name: 'dsh-kylin-memory'
       config:
-        # Automatic recall is the default path and needs no tool schema.
-        # Set to "search" to expose km_search, or "all" for admin tools.
-        assistantTools: none
+        # Automatic recall never needs a tool schema. "search" (default)
+        # additionally lets the agent query memory explicitly; "all" exposes
+        # the admin tools; "none" makes the plugin fully passive.
+        assistantTools: search
         extractionEnabled: true
         recallEnabled: true
         recallMaxNodes: 6
@@ -43,6 +44,10 @@
         # compaction/summarization request and no growing checkpoint.
         contextCompactionEnabled: true
         freshTurnCount: 5
+        # Cross-workspace recall: "all" (default) recalls across every
+        # workspace of this profile; "same-workspace" restricts automatic
+        # recall to memories captured in the current workspace.
+        recallScope: all
         # Hide completed-turn tool traces while keeping the native question
         # and final visible answer on the model surface.
         projectCompletedTurnTools: true

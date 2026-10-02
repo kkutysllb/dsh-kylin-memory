@@ -37,8 +37,11 @@ export class Recaller {
     this.embeddingFingerprint = fingerprint;
   }
 
-  async recall(query: string): Promise<RecallResult> {
+  async recall(query: string, options: { workspaceId?: string } = {}): Promise<RecallResult> {
     const limit = this.cfg.recallMaxNodes;
+    const workspaceId = this.cfg.recallScope === "same-workspace"
+      ? (options.workspaceId?.trim() || undefined)
+      : undefined;
     let queryVector: number[] | undefined;
     if (this.embed) {
       try {
@@ -49,7 +52,7 @@ export class Recaller {
       }
     }
 
-    const directMemories = this.recallTurnMemories(query, limit, queryVector);
+    const directMemories = this.recallTurnMemories(query, limit, queryVector, workspaceId);
     const seedIds = findNavigationSeedTermIds(
       this.db,
       query,
@@ -69,6 +72,7 @@ export class Recaller {
         this.db,
         rankTurnMemoryIdsByNavigation(this.db, navigationScores, {
           freshnessHalfLifeDays: this.cfg.freshnessHalfLifeDays,
+          workspaceId,
         }),
       );
     }
@@ -153,11 +157,12 @@ export class Recaller {
     query: string,
     limit: number,
     queryVector?: number[],
+    workspaceId?: string,
   ): KmTurnMemory[] {
-    const lexical = searchTurnMemories(this.db, query, limit);
+    const lexical = searchTurnMemories(this.db, query, limit, workspaceId);
     const threshold = this.cfg.semanticScoreThreshold;
     const semantic = queryVector && threshold !== undefined
-      ? turnMemoryVectorSearchWithScore(this.db, queryVector, limit, threshold)
+      ? turnMemoryVectorSearchWithScore(this.db, queryVector, limit, threshold, workspaceId)
       : [];
     const selected: KmTurnMemory[] = [];
     const seen = new Set<string>();

@@ -102,7 +102,7 @@ describe("database migrations", () => {
     expect(row.member_signature).toMatch(/^[a-f0-9]{40}$/);
     expect(
       (upgraded.prepare("SELECT MAX(v) AS version FROM _migrations").get() as any).version,
-    ).toBe(18);
+    ).toBe(19);
     const sourceColumns = upgraded.prepare("PRAGMA table_info(km_node_sources)").all() as Array<{ name: string }>;
     expect(sourceColumns.map((column) => column.name)).toEqual([
       "node_id", "session_id", "message_id", "turn_index",
@@ -122,7 +122,7 @@ describe("database migrations", () => {
       "PRAGMA table_info(km_turn_memories)",
     ).all() as Array<{ name: string }>;
     expect(turnMemoryColumns.map(column => column.name)).toEqual([
-      "id", "session_id", "summary", "outcome", "created_at", "updated_at", "superseded_count",
+      "id", "session_id", "summary", "outcome", "created_at", "updated_at", "superseded_count", "workspace_id",
     ]);
     const turnMemorySourceColumns = upgraded.prepare(
       "PRAGMA table_info(km_turn_memory_sources)",
@@ -134,7 +134,7 @@ describe("database migrations", () => {
       "PRAGMA table_info(km_navigation_triples)",
     ).all() as Array<{ name: string }>;
     expect(navigationTripleColumns.map(column => column.name)).toEqual([
-      "id", "memory_id", "session_id", "subject_id", "predicate", "object_id", "created_at", "superseded_by",
+      "id", "memory_id", "session_id", "subject_id", "predicate", "object_id", "created_at", "superseded_by", "workspace_id",
     ]);
     const queueRows = upgraded.prepare(
       "SELECT id, extraction_state FROM km_messages ORDER BY id",
