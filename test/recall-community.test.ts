@@ -24,20 +24,8 @@ import type { KmNode } from "../src/types.ts";
 let db: DatabaseSyncInstance;
 
 beforeEach(() => {
+  // createTestDb runs the real migrate() chain — no hand-copied schema here.
   db = createTestDb();
-  // 加 km_communities 表（测试 helper 的 createTestDb 可能还没有 m6）
-  try {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS km_communities (
-        id          TEXT PRIMARY KEY,
-        summary     TEXT NOT NULL,
-        node_count  INTEGER NOT NULL DEFAULT 0,
-        embedding   BLOB,
-        created_at  INTEGER NOT NULL,
-        updated_at  INTEGER NOT NULL
-      );
-    `);
-  } catch { /* 已存在 */ }
 });
 
 // ═══════════════════════════════════════════════════════════════

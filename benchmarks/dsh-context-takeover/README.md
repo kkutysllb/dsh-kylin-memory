@@ -1,10 +1,6 @@
 # DSH context-takeover benchmark
 
-> 移植自 adoresever/graph-memory 的同名基准（v72/v73 结果为**上游运行历史**，作为参照保留；本仓自有基线见 results/ 待首次运行后产生——按 docs/03-plan/0302 M5，发布 v0.2.0 前手动跑一次 GLM 路由全量 20 轮。)
-
-<p align="center">
-  <img src="../../docs/images/dsh-context-takeover-chart.svg" alt="Native DSH and Kylin Memory context growth across 20 turns" width="100%">
-</p>
+> 移植自 adoresever/graph-memory 的同名基准（v72/v73 结果为**上游运行历史**，作为参照保留；本仓自有基线见 results/ 待首次运行后产生——按 docs/03-plan/0302 M5，在付费路由可用的窗口手动跑一次 GLM 路由全量 20 轮，基线至今尚未运行。)
 
 This public benchmark measures two different questions separately:
 
@@ -39,10 +35,6 @@ Memory checks from the same candidate:
 - Every completed turn used one Kylin Memory LLM extraction call. LPA community detection and query-time PPR used no LLM calls.
 
 The complete, de-identified aggregates are in [`results/v73-navigation-summary.json`](results/v73-navigation-summary.json). The previous [`results/v72-summary.json`](results/v72-summary.json) remains available as historical evidence.
-
-<p align="center">
-  <img src="../../docs/images/dsh/vector-cross-session-recall.png" alt="Cross-session source-backed recall in a fresh DSH session" width="88%">
-</p>
 
 ## Files
 

@@ -66,11 +66,13 @@ export KYLIN_MEMORY_EMBEDDING_MODEL=text-embedding-v4
 export KYLIN_MEMORY_EMBEDDING_DIMENSIONS=1024
 ```
 
+bundle 配置（写入 `cordis.patch.yml` 的 config 块）：`freshTurnCount`（滚动保留轮数，默认 5）、`recallScope`（默认 `all`）、`freshnessHalfLifeDays`（导航新鲜度半衰期天数，默认 0=关）、`assistantTools`（默认 `search`）、`semanticScoreThreshold`（向量召回余弦门槛，默认 0.7）、`messageRetention`（默认 `keep: all`）。
+
 完整变量表与契约层说明见 [docs/01-tech/0101-双通道适配与契约层.md](docs/01-tech/0101-双通道适配与契约层.md)。
 
 ## 验证状态（v0.1.1）
 
-- 161/161 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物自包含；GitHub Actions CI；
+- 171/171 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物自包含；GitHub Actions CI；
 - `qilin plugin doctor`：usable / no compatibility findings；
 - QiLin 3.0.8 与 DSH 0.2.0-rc.2 真实 web profile 安装 + 启动验证通过（21 个迁移完成）；
 - RPC 管理通道双宿主验证：`POST /dsh-kylin-memory/overview` 未登录返回 401（鉴权栅栏生效）；

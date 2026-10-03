@@ -3,7 +3,8 @@
  *
  * Context compaction changes the model surface; it is not permission to
  * delete durable evidence. This module therefore defaults to keep=all and
- * only prunes rows that are extracted and unreferenced by graph provenance.
+ * only prunes rows that are extracted and unreferenced by graph or
+ * turn-memory provenance (km_node_sources / km_turn_memory_sources).
  */
 import { createHash } from "node:crypto";
 import type { DatabaseSyncInstance } from "./sqlite.ts";
@@ -189,6 +190,9 @@ function selectCandidates(
       AND NOT EXISTS (
         SELECT 1 FROM km_node_sources source WHERE source.message_id=m.id
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM km_turn_memory_sources source WHERE source.message_id=m.id
+      )
       ${recentClause}
       ${ageClause}
     ORDER BY m.created_at, m.session_id, m.turn_index, m.id
@@ -231,6 +235,9 @@ export function runMessageRetention(
           AND extracted=1 AND extraction_state='succeeded'
           AND NOT EXISTS (
             SELECT 1 FROM km_node_sources source WHERE source.message_id=km_messages.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM km_turn_memory_sources source WHERE source.message_id=km_messages.id
           )
       `).run(...rows.map((row) => row.id));
       deletedRows = Number(deleted.changes);

@@ -16,7 +16,9 @@ const deps: MemoryRpcDeps = {
     extraction: { pending: 0, succeeded: 2, quarantined: 0 },
     recallEnabled: true,
     embeddingState: "fts-only",
+    lastProbeAt: null,
     turnVectors: 2,
+    turnMemoriesByWorkspace: { default: 2 },
     retention: { keep: "all", recentTurns: 0, retentionDays: 0 },
   }),
   listMemories: (params) => ({
@@ -67,6 +69,13 @@ describe("memory rpc endpoints", () => {
     await expect(handleMemoryRpc(deps, "forget", { memoryId: "m1", dryRun: true })).resolves.toMatchObject({
       ok: true, value: expect.objectContaining({ messages: 0 }),
     });
+  });
+
+  it("forwards workspace-scoped forget and rejects combining it with memoryId", async () => {
+    await expect(handleMemoryRpc(deps, "forget", { sessionId: "s1", workspaceId: "w1", dryRun: true }))
+      .resolves.toMatchObject({ ok: true, value: expect.objectContaining({ turnMemories: 1 }) });
+    await expect(handleMemoryRpc(deps, "forget", { memoryId: "m1", workspaceId: "w1" }))
+      .resolves.toMatchObject({ ok: false, error: { code: "invalid" } });
   });
 
   it("maps unknown endpoints and non-object payloads to failures", async () => {

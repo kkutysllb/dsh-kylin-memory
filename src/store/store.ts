@@ -1383,13 +1383,17 @@ export interface ForgetCounts {
  */
 export function forgetTurnMemories(
   db: DatabaseSyncInstance,
-  scope: { sessionId?: string; memoryId?: string },
+  scope: { sessionId?: string; memoryId?: string; workspaceId?: string },
   options: { dryRun?: boolean; deletedBy?: string } = {},
 ): ForgetCounts {
   const sessionId = typeof scope.sessionId === "string" ? scope.sessionId.trim() : "";
   const memoryId = typeof scope.memoryId === "string" ? scope.memoryId.trim() : "";
+  const workspaceId = typeof scope.workspaceId === "string" ? scope.workspaceId.trim() : "";
   if (Boolean(sessionId) === Boolean(memoryId)) {
     throw new TypeError("forget requires exactly one of sessionId or memoryId");
+  }
+  if (workspaceId && !sessionId) {
+    throw new TypeError("forget workspaceId narrows a session scope and cannot be combined with memoryId");
   }
 
   const count = (sql: string, ...params: SQLInputValue[]): number =>
@@ -1403,10 +1407,38 @@ export function forgetTurnMemories(
     extractionSessions: 0,
   };
   if (sessionId) {
-    counts.turnMemories = count("SELECT COUNT(*) AS c FROM km_turn_memories WHERE session_id = ?", sessionId);
-    counts.messages = count("SELECT COUNT(*) AS c FROM km_messages WHERE session_id = ?", sessionId);
-    counts.navigationTriples = count("SELECT COUNT(*) AS c FROM km_navigation_triples WHERE session_id = ?", sessionId);
-    counts.extractionSessions = count("SELECT COUNT(*) AS c FROM km_extraction_sessions WHERE session_id = ?", sessionId);
+    const memoryFilter = workspaceId ? " AND workspace_id = ?" : "";
+    const memoryParams: SQLInputValue[] = workspaceId ? [sessionId, workspaceId] : [sessionId];
+    counts.turnMemories = count(`SELECT COUNT(*) AS c FROM km_turn_memories WHERE session_id = ?${memoryFilter}`, ...memoryParams);
+    // Workspace-scoped forget keeps raw evidence cited by surviving memories;
+    // only the orphans this run actually reclaims are counted.
+    counts.messages = workspaceId
+      ? count(
+          `SELECT COUNT(*) AS c FROM km_messages
+           WHERE session_id = ? AND id NOT IN (SELECT message_id FROM km_turn_memory_sources)`,
+          sessionId,
+        )
+      : count("SELECT COUNT(*) AS c FROM km_messages WHERE session_id = ?", sessionId);
+    // Triples inherit the workspace of their citing memory (the same join the
+    // recall filters use); the triples column itself is backfill-only legacy.
+    counts.navigationTriples = workspaceId
+      ? count(
+          `SELECT COUNT(*) AS c FROM km_navigation_triples t
+           JOIN km_turn_memories m ON m.id = t.memory_id
+           WHERE m.session_id = ? AND m.workspace_id = ?`,
+          sessionId,
+          workspaceId,
+        )
+      : count("SELECT COUNT(*) AS c FROM km_navigation_triples WHERE session_id = ?", sessionId);
+    if (workspaceId) {
+      // The extraction watermark only goes when the session is fully emptied.
+      const total = count("SELECT COUNT(*) AS c FROM km_turn_memories WHERE session_id = ?", sessionId);
+      counts.extractionSessions = counts.turnMemories === total
+        ? count("SELECT COUNT(*) AS c FROM km_extraction_sessions WHERE session_id = ?", sessionId)
+        : 0;
+    } else {
+      counts.extractionSessions = count("SELECT COUNT(*) AS c FROM km_extraction_sessions WHERE session_id = ?", sessionId);
+    }
   } else {
     counts.turnMemories = count("SELECT COUNT(*) AS c FROM km_turn_memories WHERE id = ?", memoryId);
     counts.messages = count(
@@ -1422,34 +1454,51 @@ export function forgetTurnMemories(
   try {
     // Deletion audit (C5): capture what is about to be destroyed before the
     // cascade removes it, so forget stays reversible by a human operator.
-    if (!sessionId || true) {
-      const doomed = (db.prepare(`
-        SELECT m.id, m.session_id, m.summary, m.outcome, m.workspace_id,
-               (SELECT json_group_array(message_id) FROM km_turn_memory_sources s WHERE s.memory_id = m.id) AS source_ids
-        FROM km_turn_memories m
-        WHERE (?1 IS NOT NULL AND m.session_id = ?1) OR (?2 IS NOT NULL AND m.id = ?2)
-      `).all(sessionId ?? null, memoryId ?? null) as Array<{
-        id: string; session_id: string; summary: string; outcome: string; workspace_id: string; source_ids: string;
-      }>);
-      const journal = db.prepare(`
-        INSERT INTO km_deletion_journal
-          (memory_id, session_id, summary, outcome, source_ids, workspace_id, deleted_by, deleted_at)
-        VALUES (?,?,?,?,?,?,?,?)
-      `);
-      for (const row of doomed) {
-        journal.run(row.id, row.session_id, row.summary, row.outcome, row.source_ids, row.workspace_id, options.deletedBy ?? "km_forget", Date.now());
-      }
+    const doomed = (db.prepare(`
+      SELECT m.id, m.session_id, m.summary, m.outcome, m.workspace_id,
+             (SELECT json_group_array(message_id) FROM km_turn_memory_sources s WHERE s.memory_id = m.id) AS source_ids
+      FROM km_turn_memories m
+      WHERE ((?1 IS NOT NULL AND m.session_id = ?1) OR (?2 IS NOT NULL AND m.id = ?2))
+        AND (?3 IS NULL OR m.workspace_id = ?3)
+    `).all(sessionId ?? null, memoryId ?? null, workspaceId || null) as Array<{
+      id: string; session_id: string; summary: string; outcome: string; workspace_id: string; source_ids: string;
+    }>);
+    const journal = db.prepare(`
+      INSERT INTO km_deletion_journal
+        (memory_id, session_id, summary, outcome, source_ids, workspace_id, deleted_by, deleted_at)
+      VALUES (?,?,?,?,?,?,?,?)
+    `);
+    for (const row of doomed) {
+      journal.run(row.id, row.session_id, row.summary, row.outcome, row.source_ids, row.workspace_id, options.deletedBy ?? "km_forget", Date.now());
     }
     // Remember which memories are being deleted: any invalidation they caused
     // must be rolled back so superseded facts become recallable again.
     const deletedIds: string[] = sessionId
-      ? (db.prepare("SELECT id FROM km_turn_memories WHERE session_id = ?").all(sessionId) as Array<{ id: string }>).map(r => r.id)
+      ? (db.prepare(
+          workspaceId
+            ? "SELECT id FROM km_turn_memories WHERE session_id = ? AND workspace_id = ?"
+            : "SELECT id FROM km_turn_memories WHERE session_id = ?",
+        ).all(...(workspaceId ? [sessionId, workspaceId] : [sessionId])) as Array<{ id: string }>).map(r => r.id)
       : [memoryId];
     if (sessionId) {
-      db.prepare("DELETE FROM km_turn_memories WHERE session_id = ?").run(sessionId);
-      const messages = db.prepare("DELETE FROM km_messages WHERE session_id = ?").run(sessionId);
-      counts.messages = Number(messages.changes);
-      db.prepare("DELETE FROM km_extraction_sessions WHERE session_id = ?").run(sessionId);
+      if (workspaceId) {
+        db.prepare("DELETE FROM km_turn_memories WHERE session_id = ? AND workspace_id = ?").run(sessionId, workspaceId);
+        // Evidence still cited by surviving memories stays; only orphans go.
+        const orphaned = db.prepare(
+          "DELETE FROM km_messages WHERE session_id = ? AND id NOT IN (SELECT message_id FROM km_turn_memory_sources)",
+        ).run(sessionId);
+        counts.messages = Number(orphaned.changes);
+        if (count("SELECT COUNT(*) AS c FROM km_turn_memories WHERE session_id = ?", sessionId) === 0) {
+          counts.extractionSessions = Number(
+            db.prepare("DELETE FROM km_extraction_sessions WHERE session_id = ?").run(sessionId).changes,
+          );
+        }
+      } else {
+        db.prepare("DELETE FROM km_turn_memories WHERE session_id = ?").run(sessionId);
+        const messages = db.prepare("DELETE FROM km_messages WHERE session_id = ?").run(sessionId);
+        counts.messages = Number(messages.changes);
+        db.prepare("DELETE FROM km_extraction_sessions WHERE session_id = ?").run(sessionId);
+      }
     } else {
       // Capture the cited messages before the cascade removes the source rows,
       // then delete only the ones no surviving memory still references.
@@ -1546,8 +1595,15 @@ export function supersedeConflictingTriples(db: DatabaseSyncInstance, memory: Km
       SELECT t.id AS triple_id, t.memory_id AS old_memory_id
       FROM km_navigation_triples t
       JOIN km_turn_memories m ON m.id = t.memory_id
-      WHERE t.subject_id IN (SELECT subject_id FROM km_navigation_triples WHERE memory_id = ?)
-        AND t.predicate IN (SELECT predicate FROM km_navigation_triples WHERE memory_id = ?)
+      WHERE EXISTS (
+          -- Pair-wise (subject, predicate) match: independent IN-sets would
+          -- cross-match, e.g. invalidating (A,p1,·) when the new memory only
+          -- asserts (A,p2,·) and (B,p1,·).
+          SELECT 1 FROM km_navigation_triples n
+          WHERE n.memory_id = ?
+            AND n.subject_id = t.subject_id
+            AND n.predicate = t.predicate
+        )
         AND t.superseded_by IS NULL
         AND t.memory_id <> ?
         AND m.created_at <= (SELECT created_at FROM km_turn_memories WHERE id = ?)
@@ -1561,7 +1617,7 @@ export function supersedeConflictingTriples(db: DatabaseSyncInstance, memory: Km
     `);
     const mark = db.prepare("UPDATE km_navigation_triples SET superseded_by = ? WHERE id = ?");
     const affected = new Set<string>();
-    for (const row of conflicting.all(memory.id, memory.id, memory.id, memory.id, memory.id) as Array<{
+    for (const row of conflicting.all(memory.id, memory.id, memory.id, memory.id) as Array<{
       triple_id: string; old_memory_id: string;
     }>) {
       mark.run(memory.id, row.triple_id);

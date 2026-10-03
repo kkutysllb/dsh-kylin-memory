@@ -60,6 +60,35 @@ describe("native DSH context takeover", () => {
     })).toThrow(/requires recentTurns or retentionDays/);
   });
 
+  it("applies KYLIN_MEMORY_SEMANTIC_SCORE_THRESHOLD as a config fallback and rejects garbage", () => {
+    const name = "KYLIN_MEMORY_SEMANTIC_SCORE_THRESHOLD";
+    const previous = process.env[name];
+    process.env[name] = "not-a-number";
+    try {
+      // Validation runs before the store opens, so the env fallback reaches
+      // the same fail-closed gate as explicit config.
+      expect(() => apply({} as any, { dbPath: ":memory:" })).toThrow(/semanticScoreThreshold/);
+    } finally {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+    // A valid env value must not throw on its own.
+    process.env[name] = "0.5";
+    try {
+      apply({
+        logger: { info() {}, warn() {}, error() {} },
+        llm: { async *stream() {} },
+        tools: { register() { return () => {}; } },
+        credentials: { async resolve() { return undefined; } },
+        on() { return () => {}; },
+        effect() { return () => {}; },
+      } as any, { dbPath: ":memory:", extractionEnabled: false, recallEnabled: false });
+    } finally {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+  });
+
   it("exposes the effective retention policy and bounded maintenance receipt", async () => {
     const tools = new Map<string, any>();
     const cleanups: Array<() => void | Promise<void>> = [];

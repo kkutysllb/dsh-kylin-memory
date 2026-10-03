@@ -271,6 +271,7 @@ function withEnvironmentDefaults(input: Config): Config {
     llmModel: input.llmModel ?? envValue("KYLIN_MEMORY_LLM_MODEL"),
     llmReasoningEffort: input.llmReasoningEffort ?? envValue("KYLIN_MEMORY_LLM_REASONING_EFFORT"),
     llmMaxTokens: input.llmMaxTokens ?? envNumber("KYLIN_MEMORY_LLM_MAX_TOKENS"),
+    semanticScoreThreshold: input.semanticScoreThreshold ?? envNumber("KYLIN_MEMORY_SEMANTIC_SCORE_THRESHOLD"),
     embedding: input.embedding ?? environmentEmbeddingConfig(),
   };
 }
@@ -361,6 +362,8 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
   );
   let embeddingState: "fts-only" | "initializing" | "vector-ready" | "degraded" =
     embeddingConfigured ? "initializing" : "fts-only";
+  // When the provider was last probed (startup ping or degraded re-probe).
+  let lastProbeAt: number | null = null;
   let closing = false;
   let abortingExtraction = false;
   const activeExtractionControllers = new Set<AbortController>();
@@ -396,6 +399,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
   async function startEmbedding(): Promise<void> {
     const embed = await createEmbedFn(embedding).catch(() => undefined);
     if (closing) return;
+    lastProbeAt = Date.now();
     if (!embed) {
       embeddingState = "degraded";
       ctx.logger.warn("[kylin-memory] embedding unavailable; lexical recall active (re-probing every 5m)");
@@ -1001,7 +1005,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
         ORDER BY extraction_updated_at DESC LIMIT 1
       `).get() as { extraction_error: string } | undefined;
       const retentionRevision = messageRetentionPolicyRevision(messageRetention);
-      return `${latestFailure ? `Extraction attention required: ${latestFailure.extraction_error}\n` : ""}Kylin Memory active (DSH native)\nStore: ${config.dbPath}\nTurn memories: ${stats.turnMemories}\nNavigation: ${stats.navigationTerms} terms / ${stats.navigationTriples} triples / ${stats.navigationCommunities} communities\nSuperseded triples: ${supersededCount}\nLegacy graph: ${stats.totalNodes} nodes / ${stats.totalEdges} edges\nMessages: ${messageCount}\nExtraction: ${extractionEnabled ? "enabled" : "disabled"} (pending=${extraction.pending}, succeeded=${extraction.succeeded}, quarantined=${extraction.quarantined})\nExtraction source: one completed turn = user question + final answer\nExtraction scheduling: live turn/end only, one serial worker per session, no startup history import, no automatic retries\nRecall: ${recallEnabled ? "enabled" : "disabled"}\nEmbedding: ${embeddingState}${embeddingModel}\nTurn vectors: ${turnVectorCount}/${stats.turnMemories}\nLegacy vectors: ${vectors.count}/${stats.totalNodes}${vectors.dimensions.length ? ` (${vectors.dimensions.join(", ")} dimensions)` : ""}\nAssistant tools: ${assistantTools}\nMessage retention: keep=${messageRetention.keep}, recentTurns=${messageRetention.recentTurns}, retentionDays=${messageRetention.retentionDays}, batchSize=${messageRetention.batchSize}, dryRun=${messageRetention.dryRun}, revision=${retentionRevision}\nRetention GC: runs=${retentionMetrics.runs}, dryRuns=${retentionMetrics.dryRuns}, selected=${retentionMetrics.selectedRows}, deleted=${retentionMetrics.deletedRows}, estimatedDeletedBytes=${retentionMetrics.deletedBytes}\nContext takeover: attached=${compactionMetrics.attached}, selected=${compactionMetrics.selected}, succeeded=${compactionMetrics.succeeded}, failed=${compactionMetrics.failed}, shadowedEvents=${compactionMetrics.shadowedEvents}, shadowedTokens=${compactionMetrics.shadowedTokens}, projectedTurns=${compactionMetrics.projectedTurns}, projectedEvents=${compactionMetrics.projectedEvents}, projectedTokens=${compactionMetrics.projectedTokens}`;
+      return `${latestFailure ? `Extraction attention required: ${latestFailure.extraction_error}\n` : ""}Kylin Memory active (DSH native)\nStore: ${config.dbPath}\nTurn memories: ${stats.turnMemories}\nNavigation: ${stats.navigationTerms} terms / ${stats.navigationTriples} triples / ${stats.navigationCommunities} communities\nSuperseded triples: ${supersededCount}\nLegacy graph: ${stats.totalNodes} nodes / ${stats.totalEdges} edges\nMessages: ${messageCount}\nExtraction: ${extractionEnabled ? "enabled" : "disabled"} (pending=${extraction.pending}, succeeded=${extraction.succeeded}, quarantined=${extraction.quarantined})\nExtraction source: one completed turn = user question + final answer\nExtraction scheduling: live turn/end only, one serial worker per session, no startup history import, no automatic retries\nRecall: ${recallEnabled ? "enabled" : "disabled"}\nEmbedding: ${embeddingState}${embeddingModel}${lastProbeAt ? ` (last probe ${new Date(lastProbeAt).toISOString()})` : ""}\nTurn vectors: ${turnVectorCount}/${stats.turnMemories}\nLegacy vectors: ${vectors.count}/${stats.totalNodes}${vectors.dimensions.length ? ` (${vectors.dimensions.join(", ")} dimensions)` : ""}\nAssistant tools: ${assistantTools}\nMessage retention: keep=${messageRetention.keep}, recentTurns=${messageRetention.recentTurns}, retentionDays=${messageRetention.retentionDays}, batchSize=${messageRetention.batchSize}, dryRun=${messageRetention.dryRun}, revision=${retentionRevision}\nRetention GC: runs=${retentionMetrics.runs}, dryRuns=${retentionMetrics.dryRuns}, selected=${retentionMetrics.selectedRows}, deleted=${retentionMetrics.deletedRows}, estimatedDeletedBytes=${retentionMetrics.deletedBytes}\nContext takeover: attached=${compactionMetrics.attached}, selected=${compactionMetrics.selected}, succeeded=${compactionMetrics.succeeded}, failed=${compactionMetrics.failed}, shadowedEvents=${compactionMetrics.shadowedEvents}, shadowedTokens=${compactionMetrics.shadowedTokens}, projectedTurns=${compactionMetrics.projectedTurns}, projectedEvents=${compactionMetrics.projectedEvents}, projectedTokens=${compactionMetrics.projectedTokens}`;
     },
   });
 
@@ -1124,6 +1128,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       properties: {
         sessionId: { type: "string", description: "Forget every memory, raw message and extraction watermark of this session" },
         memoryId: { type: "string", description: "Forget a single turn memory by id" },
+        workspaceId: { type: "string", description: "Narrow a session-scoped forget to one workspace" },
         dryRun: { type: "boolean", description: "Report deletion counts without deleting" },
       },
       additionalProperties: false,
@@ -1132,8 +1137,12 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
     execute: async (args: any = {}) => {
       const requestedSession = typeof args.sessionId === "string" ? args.sessionId.trim() : "";
       const memoryId = typeof args.memoryId === "string" ? args.memoryId.trim() : "";
+      const workspaceId = typeof args.workspaceId === "string" ? args.workspaceId.trim() : "";
       if (Boolean(requestedSession) === Boolean(memoryId)) {
         return "km_forget requires exactly one of sessionId or memoryId.";
+      }
+      if (workspaceId && memoryId) {
+        return "km_forget workspaceId narrows a session scope and cannot be combined with memoryId.";
       }
       // Stored session ids use the keyed form; accept the raw host id too.
       const sessionRowExists = (id: string): boolean =>
@@ -1142,7 +1151,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       const sessionId = requestedSession
         ? (sessionRowExists(requestedSession) ? requestedSession : keyed)
         : "";
-      const counts = forgetTurnMemories(db, { sessionId, memoryId }, { dryRun: Boolean(args.dryRun) });
+      const counts = forgetTurnMemories(db, { sessionId, memoryId, workspaceId: workspaceId || undefined }, { dryRun: Boolean(args.dryRun) });
       if (!args.dryRun && counts.turnMemories > 0) {
         // Orphaned terms change the navigation graph; PPR must not serve a
         // stale cached adjacency for the next recall.
@@ -1167,6 +1176,9 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
       const extraction = getExtractionStats(db);
       const messageCount = Number((db.prepare("SELECT COUNT(*) AS count FROM km_messages").get() as any)?.count ?? 0);
       const turnVectorCount = Number((db.prepare("SELECT COUNT(*) AS count FROM km_turn_vectors").get() as any)?.count ?? 0);
+      const workspaceRows = db.prepare(
+        "SELECT workspace_id AS workspace, COUNT(*) AS count FROM km_turn_memories GROUP BY workspace_id ORDER BY workspace_id",
+      ).all() as Array<{ workspace: string; count: number }>;
       return {
         dbPath: config.dbPath,
         turnMemories: stats.turnMemories,
@@ -1184,7 +1196,9 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
         },
         recallEnabled,
         embeddingState,
+        lastProbeAt,
         turnVectors: turnVectorCount,
+        turnMemoriesByWorkspace: Object.fromEntries(workspaceRows.map(row => [row.workspace, Number(row.count)])),
         retention: {
           keep: messageRetention.keep,
           recentTurns: messageRetention.recentTurns,
@@ -1212,7 +1226,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
     forget: async (params) => {
       const counts = forgetTurnMemories(
         db,
-        { sessionId: params.sessionId, memoryId: params.memoryId },
+        { sessionId: params.sessionId, memoryId: params.memoryId, workspaceId: params.workspaceId },
         { dryRun: params.dryRun },
       );
       if (!params.dryRun && counts.turnMemories > 0) {

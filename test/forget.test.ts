@@ -135,4 +135,32 @@ describe("forgetTurnMemories", () => {
     expect(counts.turnMemories).toBe(0);
     expect(tableCount("km_turn_memories")).toBe(1);
   });
+
+  it("workspaceId narrows a session forget and keeps other workspaces' evidence", () => {
+    const m1 = memory("m1", "dsh:session-a", 1, "项目甲的记忆。", [
+      { subject: "甲端口", predicate: "改为", object: "9090" },
+    ]);
+    const m2 = memory("m2", "dsh:session-a", 2, "项目乙的记忆。", [
+      { subject: "乙端口", predicate: "改为", object: "8080" },
+    ]);
+    db.prepare("UPDATE km_turn_memories SET workspace_id = 'ws-b' WHERE id = ?").run(m2);
+
+    const first = forgetTurnMemories(db, { sessionId: "dsh:session-a", workspaceId: "default" });
+    expect(first).toMatchObject({ turnMemories: 1, messages: 2, navigationTriples: 1, extractionSessions: 0 });
+    expect(tableCount("km_turn_memories", "WHERE id = ?", m1)).toBe(0);
+    expect(tableCount("km_turn_memories", "WHERE id = ?", m2)).toBe(1);
+    expect(tableCount("km_messages")).toBe(2);
+    expect(tableCount("km_deletion_journal")).toBe(1);
+
+    // Emptying the last workspace of the session also drops its watermark.
+    const second = forgetTurnMemories(db, { sessionId: "dsh:session-a", workspaceId: "ws-b" });
+    expect(second).toMatchObject({ turnMemories: 1, messages: 2, extractionSessions: 1 });
+    expect(tableCount("km_messages")).toBe(0);
+    expect(tableCount("km_extraction_sessions", "WHERE session_id = 'dsh:session-a'")).toBe(0);
+    expect(tableCount("km_deletion_journal")).toBe(2);
+  });
+
+  it("rejects workspaceId combined with memoryId", () => {
+    expect(() => forgetTurnMemories(db, { memoryId: "m", workspaceId: "ws" })).toThrow(TypeError);
+  });
 });

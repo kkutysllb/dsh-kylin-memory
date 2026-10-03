@@ -56,3 +56,4 @@
         # SQLite write-lock wait: KYLIN_MEMORY_DB_BUSY_TIMEOUT_MS (default 5000).
         # Semantic vector recall (optional; FTS5 fallback otherwise):
         #   KYLIN_MEMORY_EMBEDDING_API_KEY / _BASE_URL / _MODEL / _DIMENSIONS
+        # Cosine floor override: KYLIN_MEMORY_SEMANTIC_SCORE_THRESHOLD (0..1).

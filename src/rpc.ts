@@ -72,7 +72,11 @@ export interface MemoryOverviewPayload {
   extraction: { pending: number; succeeded: number; quarantined: number };
   recallEnabled: boolean;
   embeddingState: string;
+  /** Unix ms of the last embedding provider probe (startup or 5-min re-probe); null before the first attempt. */
+  lastProbeAt: number | null;
   turnVectors: number;
+  /** Turn-memory count grouped by workspace (m19 scope visibility). */
+  turnMemoriesByWorkspace: Record<string, number>;
   retention: { keep: string; recentTurns: number; retentionDays: number };
 }
 
@@ -94,7 +98,7 @@ export interface MemoryRpcDeps {
   listMemories(params: { sessionId?: string; workspaceId?: string; limit: number; offset: number }): MemoryListPayload;
   /** Read-only alias-group audit for entity normalization (M4). */
   aliasGroups(): Array<{ canonical: string; aliases: string[] }>;
-  forget(params: { sessionId?: string; memoryId?: string; dryRun: boolean }): Promise<ForgetCounts>;
+  forget(params: { sessionId?: string; memoryId?: string; workspaceId?: string; dryRun: boolean }): Promise<ForgetCounts>;
 }
 
 interface RpcHostContext {
@@ -225,12 +229,17 @@ export async function handleMemoryRpc(
     if (endpoint === "forget") {
       const sessionId = optionalString(body.sessionId, "sessionId");
       const memoryId = optionalString(body.memoryId, "memoryId");
+      const workspaceId = optionalString(body.workspaceId, "workspaceId");
       if (Boolean(sessionId) === Boolean(memoryId)) {
         return fail("invalid", "forget requires exactly one of sessionId or memoryId");
+      }
+      if (workspaceId && memoryId) {
+        return fail("invalid", "workspaceId narrows a session scope and cannot be combined with memoryId");
       }
       return ok(await deps.forget({
         sessionId,
         memoryId,
+        workspaceId,
         dryRun: optionalBoolean(body.dryRun, "dryRun") ?? false,
       }));
     }

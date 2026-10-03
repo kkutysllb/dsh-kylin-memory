@@ -31,6 +31,10 @@ describe("graph extraction data contract", () => {
     expect(() => assertGraphExtractionContract(payload)).not.toThrow();
   });
 
+  it("accepts an empty triples list as a valid no-relation turn", () => {
+    expect(() => assertGraphExtractionContract({ ...validPayload, triples: [] })).not.toThrow();
+  });
+
   it("rejects a payload with a missing required field", () => {
     const { triples: _removed, ...incomplete } = validPayload;
     expect(() => assertGraphExtractionContract(incomplete)).toThrow("contract violation");

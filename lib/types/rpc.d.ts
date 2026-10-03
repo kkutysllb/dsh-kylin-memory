@@ -38,7 +38,11 @@ export interface MemoryOverviewPayload {
     };
     recallEnabled: boolean;
     embeddingState: string;
+    /** Unix ms of the last embedding provider probe (startup or 5-min re-probe); null before the first attempt. */
+    lastProbeAt: number | null;
     turnVectors: number;
+    /** Turn-memory count grouped by workspace (m19 scope visibility). */
+    turnMemoriesByWorkspace: Record<string, number>;
     retention: {
         keep: string;
         recentTurns: number;
@@ -72,6 +76,7 @@ export interface MemoryRpcDeps {
     forget(params: {
         sessionId?: string;
         memoryId?: string;
+        workspaceId?: string;
         dryRun: boolean;
     }): Promise<ForgetCounts>;
 }

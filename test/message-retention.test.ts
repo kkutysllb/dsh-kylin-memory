@@ -73,6 +73,39 @@ describe("message retention policy", () => {
     db.close();
   });
 
+  it("preserves raw evidence cited by turn memories, and reclaims it once uncited", () => {
+    const db = createTestDb();
+    insertMessage(db, "tm-evidence", "s1", 1, "user");
+    insertMessage(db, "orphan", "s1", 2, "assistant");
+    // Turn-memory provenance only: no legacy km_node_sources row exists.
+    db.prepare(`
+      INSERT INTO km_turn_memories (id, session_id, summary, outcome, created_at, updated_at)
+      VALUES ('tm1', 's1', '摘要', 'completed', 1, 1)
+    `).run();
+    db.prepare(`
+      INSERT INTO km_turn_memory_sources (memory_id, message_id, turn_index, source_order)
+      VALUES ('tm1', 'tm-evidence', 1, 0)
+    `).run();
+
+    const first = runMessageRetention(
+      db,
+      normalizeMessageRetentionPolicy({ keep: "referenced", batchSize: 10 }),
+    );
+    expect(first.deletedRows).toBe(1);
+    expect(ids(db)).toEqual(["tm-evidence"]);
+
+    // Deleting the citing memory cascades the source row away, so the raw
+    // evidence becomes reclaimable by the next batch.
+    db.prepare("DELETE FROM km_turn_memories WHERE id = 'tm1'").run();
+    const second = runMessageRetention(
+      db,
+      normalizeMessageRetentionPolicy({ keep: "referenced", batchSize: 10 }),
+    );
+    expect(second.deletedRows).toBe(1);
+    expect(ids(db)).toEqual([]);
+    db.close();
+  });
+
   it("never deletes quarantined messages even if a legacy flag is inconsistent", () => {
     const db = createTestDb();
     insertMessage(db, "safe", "s1", 1, "user");

@@ -82,6 +82,38 @@ describe("supersedeConflictingTriples", () => {
     ).get() as { c: number };
     expect(Number(remaining.c)).toBe(0);
   });
+
+  // Regression: subject and predicate candidates must pair up per triple.
+  // Independent IN-sets used to cross-match and over-invalidate, e.g. marking
+  // (A,p1,·) stale when the new memory only asserts (A,p2,·) and (B,p1,·).
+  it("requires a matching (subject, predicate) pair, not cross-matched sets", () => {
+    const old = memory("m1", "dsh:s", 1, "多事实旧记录。", [
+      { subject: "服务端口", predicate: "改为", object: "9090" },
+      { subject: "服务端口", predicate: "部署在", object: "网关机" },
+    ]);
+    const newer = memory("m2", "dsh:s", 2, "多事实新记录。", [
+      { subject: "服务端口", predicate: "改为", object: "8080" },
+      { subject: "数据库端口", predicate: "部署在", object: "存储机" },
+    ]);
+    supersedeConflictingTriples(db, newer);
+
+    // (服务端口, 改为) restated with a new object: invalidated.
+    const invalidated = db.prepare(
+      `SELECT COUNT(*) AS c FROM km_navigation_triples t
+       WHERE t.memory_id = ? AND t.predicate = ? AND t.superseded_by IS NOT NULL`,
+    ).get(old.id, "改为") as { c: number };
+    expect(Number(invalidated.c)).toBe(1);
+    // (服务端口, 部署在) was never restated as a pair: must survive.
+    const surviving = db.prepare(
+      `SELECT COUNT(*) AS c FROM km_navigation_triples t
+       WHERE t.memory_id = ? AND t.predicate = ? AND t.superseded_by IS NULL`,
+    ).get(old.id, "部署在") as { c: number };
+    expect(Number(surviving.c)).toBe(1);
+    const oldMemory = db.prepare(
+      `SELECT superseded_count FROM km_turn_memories WHERE id = ?`,
+    ).get(old.id) as Record<string, number>;
+    expect(Number(oldMemory.superseded_count)).toBe(1);
+  });
 });
 
 describe("filterSupersededTurnMemories", () => {

@@ -229,6 +229,7 @@ export interface ForgetCounts {
 export declare function forgetTurnMemories(db: DatabaseSyncInstance, scope: {
     sessionId?: string;
     memoryId?: string;
+    workspaceId?: string;
 }, options?: {
     dryRun?: boolean;
     deletedBy?: string;
