@@ -1,4 +1,10 @@
 import { type DshModelInfoService } from "./engine/dsh-extraction-route.ts";
+import { type LiveValue } from "./types.ts";
+/**
+ * Configuration schema for the host settings page (plugin detail page form).
+ * Volatile fields are live-editable; see src/schema.ts for the field contract.
+ */
+export { Config } from "./schema.ts";
 import { type MessageRetentionConfig } from "./store/retention.ts";
 export declare const name = "dsh-kylin-memory";
 export declare const inject: string[];
@@ -11,19 +17,29 @@ interface DshEmbeddingConfig {
     /** Direct secret resolver; used by the environment fallback path. */
     apiKeyResolver?: () => Promise<string | undefined>;
 }
-export interface Config {
+export interface PluginConfig {
     dbPath?: string;
     dbBusyTimeoutMs?: number;
     extractionEnabled?: boolean;
     recallEnabled?: boolean;
-    recallMaxNodes?: number;
-    /** Optional embedding-provider-calibrated cosine floor for every recall path. */
-    semanticScoreThreshold?: number;
-    maintenanceInterval?: number;
+    /** Schema-volatile: live-editable on the host settings page. */
+    recallMaxNodes?: LiveValue<number>;
+    /**
+     * Optional embedding-provider-calibrated cosine floor for every recall path.
+     * Schema-volatile; the host resolver wraps it in a live reference even when
+     * unset, so environment fallbacks read through `readLive`.
+     */
+    semanticScoreThreshold?: LiveValue<number>;
+    /** Schema-volatile: live-editable on the host settings page. */
+    maintenanceInterval?: LiveValue<number>;
     /** Durable raw-message retention. Defaults to keep=all (no deletion). */
     messageRetention?: MessageRetentionConfig;
-    /** Keep this many newest real user turns as native question/final-answer endpoints on the DSH model surface. */
-    freshTurnCount?: number;
+    /**
+     * Keep this many newest real user turns as native question/final-answer
+     * endpoints on the DSH model surface. Schema-volatile: live-editable on the
+     * host settings page.
+     */
+    freshTurnCount?: LiveValue<number>;
     /** Cross-workspace recall policy. "all" (default): global recall as before.
      * "same-workspace": only recall memories captured in the current workspace. */
     recallScope?: "all" | "same-workspace";
@@ -91,5 +107,4 @@ interface DshContext {
     on(event: string, listener: (...args: any[]) => any, options?: Record<string, unknown>): () => void;
     effect(register: () => (() => void | Promise<void>), label?: string): () => void;
 }
-export declare function apply(ctx: DshContext, rawInput?: Config): void;
-export {};
+export declare function apply(ctx: DshContext, rawInput?: PluginConfig): void;

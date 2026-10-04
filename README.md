@@ -68,15 +68,18 @@ export KYLIN_MEMORY_EMBEDDING_DIMENSIONS=1024
 
 bundle 配置（写入 `cordis.patch.yml` 的 config 块）：`freshTurnCount`（滚动保留轮数，默认 5）、`recallScope`（默认 `all`）、`freshnessHalfLifeDays`（导航新鲜度半衰期天数，默认 0=关）、`assistantTools`（默认 `search`）、`semanticScoreThreshold`（向量召回余弦门槛，默认 0.7）、`messageRetention`（默认 `keep: all`）。
 
+四个高频参数也开放在**宿主插件详情页的设置表单**（v0.1.3+，web 面板 → 插件 → dsh-kylin-memory）：`freshTurnCount`（保留最近轮数）、`maintenanceInterval`（维护节奏，每 N 轮一次图维护与保留 GC，默认 6）、`recallMaxNodes`（单次召回上限，默认 6）、`semanticScoreThreshold`（语义召回阈值，留空 = 默认 0.7）。表单保存写入 profile 用户覆盖层，bundle patch 是默认值层（可"恢复默认"）；volatile 字段即时生效、无需重启插件，其余配置仍走文件层。
+
 完整变量表与契约层说明见 [docs/01-tech/0101-双通道适配与契约层.md](docs/01-tech/0101-双通道适配与契约层.md)。
 
-## 验证状态（v0.1.1）
+## 验证状态（v0.1.3）
 
-- 171/171 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物自包含；GitHub Actions CI；
-- `qilin plugin doctor`：usable / no compatibility findings；
+- 177/177 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物自包含（host + web client）；GitHub Actions CI；
+- smoke 发布面契约 ALL PASS（双 manifest、静态 patch、零 `@deepseek-ai/*` 导入、client 契约）；
 - QiLin 3.0.8 与 DSH 0.2.0-rc.2 真实 web profile 安装 + 启动验证通过（21 个迁移完成）；
 - RPC 管理通道双宿主验证：`POST /dsh-kylin-memory/overview` 未登录返回 401（鉴权栅栏生效）；
-- 极简 profile（无 web 栈）验证：插件正常激活（RPC 通道为动态可选面）。
+- 极简 profile（无 web 栈）验证：插件正常激活（RPC 通道与设置表单同为动态可选面）；
+- client bundle 经 shell 模块表模拟验证全链路走通（factory 注册、configForms 命名空间、keyed 槽位、表单渲染）。
 
 ## 文档索引
 

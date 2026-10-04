@@ -111,13 +111,20 @@ export interface EmbeddingConfig {
     model?: string;
     dimensions?: number;
 }
+export interface VolatileRef<T> {
+    readonly get: () => T;
+}
+/** A config value that may be a plain value or a host live reference. */
+export type LiveValue<T> = T | VolatileRef<T>;
+/** Unwrap one config value, returning the current plain value. */
+export declare function readLive<T>(value: LiveValue<T>): T;
 export interface KmConfig {
     dbPath: string;
     /** SQLite write-lock wait in milliseconds; omitted uses the shared store policy. */
     dbBusyTimeoutMs?: number;
-    compactTurnCount: number;
+    compactTurnCount: LiveValue<number>;
     /** Maximum query-matched memory nodes returned by one recall. */
-    recallMaxNodes: number;
+    recallMaxNodes: LiveValue<number>;
     /** Exponential freshness half-life (days) for navigation ranks. 0 disables
      * time bias (historical behaviour). Typical: 14. */
     freshnessHalfLifeDays: number;
@@ -129,9 +136,9 @@ export interface KmConfig {
      * Deliberately required by DEFAULT_CONFIG: ranked top-k alone always returns
      * a "nearest" memory even when no memory is actually relevant.
      */
-    semanticScoreThreshold?: number;
+    semanticScoreThreshold?: LiveValue<number>;
     /** Number of recent user turns kept as native question/final-answer endpoints on the host context surface. */
-    freshTurnCount: number;
+    freshTurnCount: LiveValue<number>;
     embedding?: EmbeddingConfig;
     llm?: {
         apiKey?: string;
@@ -147,4 +154,15 @@ export interface KmConfig {
     /** PageRank 迭代次数 */
     pagerankIterations: number;
 }
+/**
+ * Plain (non-live) baseline values shared by DEFAULT_CONFIG and the settings
+ * schema defaults (src/schema.ts). Validation and fallbacks read these as
+ * plain numbers; the schema repeats them as its own defaults.
+ */
+export declare const PLAIN_DEFAULTS: {
+    readonly freshTurnCount: 5;
+    readonly compactTurnCount: 6;
+    readonly recallMaxNodes: 6;
+    readonly semanticScoreThreshold: 0.7;
+};
 export declare const DEFAULT_CONFIG: KmConfig;

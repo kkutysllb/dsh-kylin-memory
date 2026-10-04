@@ -139,13 +139,35 @@ export interface EmbeddingConfig {
 
 // ─── 插件配置 ─────────────────────────────────────────────────
 
+/**
+ * Live config reference protocol shared with the host (cosmokit). Schema-
+ * volatile fields arrive from the DSH config resolver as frozen refs whose
+ * value the host swaps in place on a settings-page save — reading through
+ * `readLive` picks up edits without a plugin restart.
+ */
+const VOLATILE_WRITE = Symbol.for("cosmokit.volatile.write");
+
+export interface VolatileRef<T> {
+  readonly get: () => T;
+}
+
+/** A config value that may be a plain value or a host live reference. */
+export type LiveValue<T> = T | VolatileRef<T>;
+
+/** Unwrap one config value, returning the current plain value. */
+export function readLive<T>(value: LiveValue<T>): T {
+  return value !== null && typeof value === "object" && VOLATILE_WRITE in value
+    ? (value as VolatileRef<T>).get()
+    : (value as T);
+}
+
 export interface KmConfig {
   dbPath: string;
   /** SQLite write-lock wait in milliseconds; omitted uses the shared store policy. */
   dbBusyTimeoutMs?: number;
-  compactTurnCount: number;
+  compactTurnCount: LiveValue<number>;
   /** Maximum query-matched memory nodes returned by one recall. */
-  recallMaxNodes: number;
+  recallMaxNodes: LiveValue<number>;
   /** Exponential freshness half-life (days) for navigation ranks. 0 disables
    * time bias (historical behaviour). Typical: 14. */
   freshnessHalfLifeDays: number;
@@ -157,9 +179,9 @@ export interface KmConfig {
    * Deliberately required by DEFAULT_CONFIG: ranked top-k alone always returns
    * a "nearest" memory even when no memory is actually relevant.
    */
-  semanticScoreThreshold?: number;
+  semanticScoreThreshold?: LiveValue<number>;
   /** Number of recent user turns kept as native question/final-answer endpoints on the host context surface. */
-  freshTurnCount: number;
+  freshTurnCount: LiveValue<number>;
   embedding?: EmbeddingConfig;
   llm?: {
     apiKey?: string;
@@ -176,18 +198,30 @@ export interface KmConfig {
   pagerankIterations: number;
 }
 
-export const DEFAULT_CONFIG: KmConfig = {
-  dbPath: "~/.openclaw/kylin-memory.db",
+/**
+ * Plain (non-live) baseline values shared by DEFAULT_CONFIG and the settings
+ * schema defaults (src/schema.ts). Validation and fallbacks read these as
+ * plain numbers; the schema repeats them as its own defaults.
+ */
+export const PLAIN_DEFAULTS = {
+  freshTurnCount: 5,
   compactTurnCount: 6,
   recallMaxNodes: 6,
-  freshnessHalfLifeDays: 0,
-  recallScope: "all",
   // Automatic prompt injection optimizes for precision. On the existing
   // text-embedding-v4 20-turn corpus, 0.70 sits above the p90 different-turn
   // similarity (0.669) and near the same-turn median (0.721). Other embedding
   // providers can override this single documented policy value.
   semanticScoreThreshold: 0.70,
-  freshTurnCount: 5,
+} as const;
+
+export const DEFAULT_CONFIG: KmConfig = {
+  dbPath: "~/.openclaw/kylin-memory.db",
+  compactTurnCount: PLAIN_DEFAULTS.compactTurnCount,
+  recallMaxNodes: PLAIN_DEFAULTS.recallMaxNodes,
+  freshnessHalfLifeDays: 0,
+  recallScope: "all",
+  semanticScoreThreshold: PLAIN_DEFAULTS.semanticScoreThreshold,
+  freshTurnCount: PLAIN_DEFAULTS.freshTurnCount,
   pagerankDamping: 0.85,
   pagerankIterations: 20,
 };

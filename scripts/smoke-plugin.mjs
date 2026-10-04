@@ -3,12 +3,14 @@
  * dsh-kylin-memory 插件冒烟测试（零依赖，node scripts/smoke-plugin.mjs）。
  *
  * 覆盖发布面契约：
- * 1. package.json：dsh.bundle / qilin.bundle 双通道 manifest、exports、
- *    files 白名单覆盖检查（白名单内每个路径真实存在）；
+ * 1. package.json：dsh.bundle / qilin.bundle 双通道 manifest（bundle+client
+ *    一致）、exports、files 白名单覆盖检查（白名单内每个路径真实存在）；
  * 2. cordis.patch.yml：可解析、单行 insert、row id/name 与包名一致；
  * 3. host bundle（lib/index.js）：ESM、零 `@deepseek-ai/*` 运行时导入
- *    （宿主运行时不向插件提供框架模块）、导出 apply/inject/name；
- * 4. 隔离：测试不写入任何用户数据。
+ *    （schemastery/cosmokit 已 vendor 进 bundle）、导出 apply/inject/name/Config；
+ * 4. 设置页 client（lib/client.js）：__ModuleLoader__ 契约、keyed
+ *    plugins.bundle.config 槽位、configForms 命名空间；RPC 管理通道仍在；
+ * 5. 隔离：测试不写入任何用户数据。
  */
 import { existsSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -70,13 +72,37 @@ check('host bundle 导出 apply', /\bexport\b[\s\S]{0,200}\bfunction apply\b|con
 check('host bundle 声明 inject 契约名', hostSource.includes('"tools"') && hostSource.includes('"llm"') && hostSource.includes('"sessions"') && hostSource.includes('"tokenMeter"'))
 check('host bundle 注册 km_* 工具', hostSource.includes('km_search') && hostSource.includes('km_status'))
 
-/* ═══ 4. 无 UI 决策与 RPC 通道 ═══ */
+/* ═══ 4. 设置页 client 与 RPC 通道 ═══ */
 
-// UI 决策（2026-10-02）：纯 Agent 工具入口，不注册任何 client/slot。
-check('manifest 不含 client 交付块（无 UI 决策）',
-  manifest.dsh?.client === undefined && manifest.qilin?.client === undefined)
-check('exports 不含 ./client', manifest.exports?.['./client'] === undefined)
-check('仓库无 src/client 残留', !existsSync(join(packageRoot, 'src/client')))
+// UI 决策（2026-10-04 修订）：详情页设置表单走 keyed `plugins.bundle.config`
+// 槽位 + configForms 命名空间；`plugins.item` 是官方设置页专用，不占用。
+check('dsh.client 与 qilin.client 声明一致（platform web）',
+  manifest.dsh?.client !== undefined
+  && JSON.stringify(manifest.dsh.client) === JSON.stringify(manifest.qilin?.client)
+  && manifest.dsh.client.platform === 'web')
+check('exports["./client"] 指向 lib/client.js', manifest.exports?.['./client'] === './lib/client.js')
+check('client inject 覆盖 locale / settings / plugin-manager',
+  JSON.stringify(manifest.dsh.client.inject) === JSON.stringify([
+    '@deepseek-ai/dsh-client-locale',
+    '@deepseek-ai/dsh-client-ui-settings',
+    '@deepseek-ai/dsh-client-ui-plugin-manager',
+  ]))
+
+const clientPath = join(packageRoot, 'lib/client.js')
+check('lib/client.js 存在', existsSync(clientPath))
+const clientSource = await readFile(clientPath, 'utf8')
+check('client bundle 走 __ModuleLoader__ 模块表契约',
+  clientSource.startsWith('window.__ModuleLoader__.load({')
+  && clientSource.replace(/\/\/# sourceMappingURL=.*\n?$/, '').trimEnd().endsWith('} });'))
+check('client 注册 plugins.bundle.config 槽位（key = 包名）',
+  clientSource.includes('"plugins.bundle.config"') && clientSource.includes(`"${manifest.name}"`))
+check('client 表单绑定 configForms 命名空间',
+  clientSource.includes('configForms') && clientSource.includes(`"${manifest.name}"`))
+check('client 通过 shell require 引 UI 原语（不打包 react）',
+  clientSource.includes('require("@deepseek-ai/dsh-client-ui-primitives")')
+  && clientSource.includes('require("react/jsx-runtime")'))
+check('host bundle 声明 Config schema（设置页数据源）',
+  hostSource.includes('Config') && hostSource.includes('volatile'))
 check('host bundle 含 /dsh-kylin-memory RPC 管理通道（headless admin API）',
   hostSource.includes('/dsh-kylin-memory'))
 

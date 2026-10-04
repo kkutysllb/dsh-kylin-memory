@@ -11,6 +11,7 @@
 import { type DatabaseSyncInstance } from "../store/sqlite.ts";
 import { createHash } from "crypto";
 import type { KmConfig, RecallResult, KmNode, KmTurnMemory } from "../types.ts";
+import { readLive } from "../types.ts";
 import type { EmbedFn } from "../engine/embed.ts";
 import {
   searchNodes, vectorSearchWithScore,
@@ -38,7 +39,7 @@ export class Recaller {
   }
 
   async recall(query: string, options: { workspaceId?: string } = {}): Promise<RecallResult> {
-    const limit = this.cfg.recallMaxNodes;
+    const limit = readLive(this.cfg.recallMaxNodes);
     const workspaceId = this.cfg.recallScope === "same-workspace"
       ? (options.workspaceId?.trim() || undefined)
       : undefined;
@@ -160,7 +161,7 @@ export class Recaller {
     workspaceId?: string,
   ): KmTurnMemory[] {
     const lexical = searchTurnMemories(this.db, query, limit, workspaceId);
-    const threshold = this.cfg.semanticScoreThreshold;
+    const threshold = readLive(this.cfg.semanticScoreThreshold);
     const semantic = queryVector && threshold !== undefined
       ? turnMemoryVectorSearchWithScore(this.db, queryVector, limit, threshold, workspaceId)
       : [];
@@ -187,7 +188,7 @@ export class Recaller {
     legacyOnly = false,
   ): Promise<RecallResult> {
     const lexical = searchNodes(this.db, query, limit, legacyOnly);
-    const threshold = this.cfg.semanticScoreThreshold;
+    const threshold = readLive(this.cfg.semanticScoreThreshold);
     const semantic = queryVector && threshold !== undefined
       ? vectorSearchWithScore(
           this.db,

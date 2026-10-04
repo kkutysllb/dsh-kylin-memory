@@ -66,7 +66,13 @@ import { computeGlobalPageRank, invalidateGraphCache } from "./graph/pagerank.ts
 import { detectCommunities, detectNavigationCommunities } from "./graph/community.ts";
 import { mergeAliasTerms } from "./graph/maintenance.ts";
 import { registerMemoryRpc, type MemoryRpcDeps } from "./rpc.ts";
-import { DEFAULT_CONFIG, type KmConfig, type NodeType } from "./types.ts";
+import { DEFAULT_CONFIG, PLAIN_DEFAULTS, type KmConfig, type LiveValue, type NodeType, readLive } from "./types.ts";
+
+/**
+ * Configuration schema for the host settings page (plugin detail page form).
+ * Volatile fields are live-editable; see src/schema.ts for the field contract.
+ */
+export { Config } from "./schema.ts";
 import {
   messageRetentionPolicyRevision,
   normalizeMessageRetentionPolicy,
@@ -88,19 +94,29 @@ interface DshEmbeddingConfig {
   apiKeyResolver?: () => Promise<string | undefined>;
 }
 
-export interface Config {
+export interface PluginConfig {
   dbPath?: string;
   dbBusyTimeoutMs?: number;
   extractionEnabled?: boolean;
   recallEnabled?: boolean;
-  recallMaxNodes?: number;
-  /** Optional embedding-provider-calibrated cosine floor for every recall path. */
-  semanticScoreThreshold?: number;
-  maintenanceInterval?: number;
+  /** Schema-volatile: live-editable on the host settings page. */
+  recallMaxNodes?: LiveValue<number>;
+  /**
+   * Optional embedding-provider-calibrated cosine floor for every recall path.
+   * Schema-volatile; the host resolver wraps it in a live reference even when
+   * unset, so environment fallbacks read through `readLive`.
+   */
+  semanticScoreThreshold?: LiveValue<number>;
+  /** Schema-volatile: live-editable on the host settings page. */
+  maintenanceInterval?: LiveValue<number>;
   /** Durable raw-message retention. Defaults to keep=all (no deletion). */
   messageRetention?: MessageRetentionConfig;
-  /** Keep this many newest real user turns as native question/final-answer endpoints on the DSH model surface. */
-  freshTurnCount?: number;
+  /**
+   * Keep this many newest real user turns as native question/final-answer
+   * endpoints on the DSH model surface. Schema-volatile: live-editable on the
+   * host settings page.
+   */
+  freshTurnCount?: LiveValue<number>;
   /** Cross-workspace recall policy. "all" (default): global recall as before.
    * "same-workspace": only recall memories captured in the current workspace. */
   recallScope?: "all" | "same-workspace";
@@ -262,7 +278,7 @@ function environmentEmbeddingConfig(): DshEmbeddingConfig | undefined {
   };
 }
 
-function withEnvironmentDefaults(input: Config): Config {
+function withEnvironmentDefaults(input: PluginConfig): PluginConfig {
   return {
     ...input,
     dbPath: input.dbPath ?? resolveDefaultDbPath(),
@@ -271,14 +287,22 @@ function withEnvironmentDefaults(input: Config): Config {
     llmModel: input.llmModel ?? envValue("KYLIN_MEMORY_LLM_MODEL"),
     llmReasoningEffort: input.llmReasoningEffort ?? envValue("KYLIN_MEMORY_LLM_REASONING_EFFORT"),
     llmMaxTokens: input.llmMaxTokens ?? envNumber("KYLIN_MEMORY_LLM_MAX_TOKENS"),
-    semanticScoreThreshold: input.semanticScoreThreshold ?? envNumber("KYLIN_MEMORY_SEMANTIC_SCORE_THRESHOLD"),
+    // The resolver wraps unset volatile fields in a live reference, so the
+    // env fallback must look through it; the trailing branch keeps the
+    // reference itself when neither the config nor the environment has a value.
+    semanticScoreThreshold: readLive(input.semanticScoreThreshold)
+      ?? envNumber("KYLIN_MEMORY_SEMANTIC_SCORE_THRESHOLD")
+      ?? input.semanticScoreThreshold,
     embedding: input.embedding ?? environmentEmbeddingConfig(),
   };
 }
 
-export function apply(ctx: DshContext, rawInput: Config = {}): void {
+export function apply(ctx: DshContext, rawInput: PluginConfig = {}): void {
   const input = withEnvironmentDefaults(rawInput);
-  const freshTurnCount = input.freshTurnCount ?? 5;
+  // Schema-volatile fields arrive as live references; validation reads the
+  // plain values while the config keeps the references so settings-page edits
+  // apply without a plugin restart.
+  const freshTurnCount = readLive(input.freshTurnCount) ?? PLAIN_DEFAULTS.freshTurnCount;
   if (!Number.isInteger(freshTurnCount) || freshTurnCount < 1) {
     throw new TypeError(`[kylin-memory] freshTurnCount must be a positive integer, received ${freshTurnCount}`);
   }
@@ -295,20 +319,21 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
   if (!["search", "all", "none"].includes(assistantTools)) {
     throw new TypeError(`[kylin-memory] assistantTools must be search, all or none, received ${String(assistantTools)}`);
   }
-  const recallMaxNodes = input.recallMaxNodes ?? DEFAULT_CONFIG.recallMaxNodes;
+  const recallMaxNodes = readLive(input.recallMaxNodes) ?? PLAIN_DEFAULTS.recallMaxNodes;
   if (!Number.isInteger(recallMaxNodes) || recallMaxNodes < 1) {
     throw new TypeError(`[kylin-memory] recallMaxNodes must be a positive integer, received ${recallMaxNodes}`);
   }
-  if (input.semanticScoreThreshold !== undefined && (
-    !Number.isFinite(input.semanticScoreThreshold)
-    || input.semanticScoreThreshold < -1
-    || input.semanticScoreThreshold > 1
+  const semanticScoreThreshold = readLive(input.semanticScoreThreshold);
+  if (semanticScoreThreshold !== undefined && (
+    !Number.isFinite(semanticScoreThreshold)
+    || semanticScoreThreshold < -1
+    || semanticScoreThreshold > 1
   )) {
     throw new TypeError(
-      `[kylin-memory] semanticScoreThreshold must be between -1 and 1 when configured, received ${input.semanticScoreThreshold}`,
+      `[kylin-memory] semanticScoreThreshold must be between -1 and 1 when configured, received ${semanticScoreThreshold}`,
     );
   }
-  const maintenanceInterval = input.maintenanceInterval ?? DEFAULT_CONFIG.compactTurnCount;
+  const maintenanceInterval = readLive(input.maintenanceInterval) ?? PLAIN_DEFAULTS.compactTurnCount;
   if (!Number.isInteger(maintenanceInterval) || maintenanceInterval < 1) {
     throw new TypeError(`[kylin-memory] maintenanceInterval must be a positive integer, received ${maintenanceInterval}`);
   }
@@ -337,8 +362,12 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
   const config: KmConfig = {
     ...DEFAULT_CONFIG,
     dbPath: input.dbPath ?? resolveDefaultDbPath(),
-    compactTurnCount: maintenanceInterval,
-    recallMaxNodes,
+    // Schema-volatile fields keep the host's live reference (plain values
+    // from direct programmatic use pass through); consumers read them with
+    // readLive so a settings-page save applies without a restart.
+    compactTurnCount: input.maintenanceInterval ?? DEFAULT_CONFIG.compactTurnCount,
+    recallMaxNodes: input.recallMaxNodes ?? DEFAULT_CONFIG.recallMaxNodes,
+    freshTurnCount: input.freshTurnCount ?? PLAIN_DEFAULTS.freshTurnCount,
     recallScope,
     semanticScoreThreshold: input.semanticScoreThreshold ?? DEFAULT_CONFIG.semanticScoreThreshold,
     embedding,
@@ -545,7 +574,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
     const extractor = new Extractor(config, (system, user) => complete(route, system, user));
     const currentTurn = Math.min(...messages.map(message => Number(message.turn_index)));
     const priorTurns = Number.isFinite(currentTurn)
-      ? getRecentTurnMemoriesBySession(db, sid, currentTurn, freshTurnCount)
+      ? getRecentTurnMemoriesBySession(db, sid, currentTurn, readLive(config.freshTurnCount))
       : [];
     const result = await extractor.extract({
       messages,
@@ -756,7 +785,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
     const key = String(sessionId);
     const turns = (turnCounts.get(key) ?? 0) + 1;
     turnCounts.set(key, turns);
-    if (turns % config.compactTurnCount !== 0) return;
+    if (turns % readLive(config.compactTurnCount) !== 0) return;
     runMaintenanceTick();
   }
 
@@ -816,7 +845,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
           && messages.some(message => message?.source?.kind === "user");
         const range = selectDshRollingCompactionRange(
           agent?.session,
-          freshTurnCount,
+          readLive(config.freshTurnCount),
           !hasIncomingUser,
         );
         if (range) {
@@ -830,7 +859,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
           compactionMetrics.shadowedTokens += result.shadowedTokenCount;
           ctx.logger.info(
             `[kylin-memory] archived ${result.shadowedSeqs.length} surface events ` +
-            `(~${result.shadowedTokenCount} tokens); retained ${freshTurnCount} previous user turns`,
+            `(~${result.shadowedTokenCount} tokens); retained ${readLive(config.freshTurnCount)} previous user turns`,
           );
         }
       } catch (error) {
@@ -892,7 +921,7 @@ export function apply(ctx: DshContext, rawInput: Config = {}): void {
         recalledEdges: recalled.edges.filter(edge => recalledIds.has(edge.fromId) && recalledIds.has(edge.toId)),
         recalledMemories,
         recalledTriples: recalled.triples,
-        freshTurnCount,
+        freshTurnCount: readLive(config.freshTurnCount),
         excludedSourceMessageIds: visibleMessageIds,
       });
       const text = [
