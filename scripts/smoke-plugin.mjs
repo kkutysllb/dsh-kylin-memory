@@ -9,7 +9,8 @@
  * 3. host bundle（lib/index.js）：ESM、零 `@deepseek-ai/*` 运行时导入
  *    （schemastery/cosmokit 已 vendor 进 bundle）、导出 apply/inject/name/Config；
  * 4. 设置页 client（lib/client.js）：__ModuleLoader__ 契约、keyed
- *    plugins.bundle.config 槽位、configForms 命名空间；RPC 管理通道仍在；
+ *    plugins.bundle.config 槽位、页面契约 form.state/form.mutate（QiLin
+ *    PluginConfigViewProps，DSH 时代 settings 原语零残留）；RPC 管理通道仍在；
  * 5. 隔离：测试不写入任何用户数据。
  */
 import { existsSync, statSync } from 'node:fs'
@@ -74,19 +75,17 @@ check('host bundle 注册 km_* 工具', hostSource.includes('km_search') && host
 
 /* ═══ 4. 设置页 client 与 RPC 通道 ═══ */
 
-// UI 决策（2026-10-04 修订）：详情页设置表单走 keyed `plugins.bundle.config`
-// 槽位 + configForms 命名空间；`plugins.item` 是官方设置页专用，不占用。
+// UI 决策（2026-10-06 修订，v0.2.0）：设置卡改按 QiLin 详情页契约渲染——
+// keyed `plugins.bundle.config` 槽位 + PluginConfigViewProps（页面自带 form，
+// 卡片只消费 form.state / form.mutate）；`plugins.item` 是官方设置页专用，不占用。
 check('dsh.client 与 qilin.client 声明一致（platform web）',
   manifest.dsh?.client !== undefined
   && JSON.stringify(manifest.dsh.client) === JSON.stringify(manifest.qilin?.client)
   && manifest.dsh.client.platform === 'web')
 check('exports["./client"] 指向 lib/client.js', manifest.exports?.['./client'] === './lib/client.js')
-check('client inject 覆盖 locale / settings / plugin-manager',
-  JSON.stringify(manifest.dsh.client.inject) === JSON.stringify([
-    '@deepseek-ai/dsh-client-locale',
-    '@deepseek-ai/dsh-client-ui-settings',
-    '@deepseek-ai/dsh-client-ui-plugin-manager',
-  ]))
+check('client inject 依赖边均为 dsh-compat 可映射名（doctor client-inject 规则；informational）',
+  Array.isArray(manifest.dsh.client.inject) && manifest.dsh.client.inject.length > 0
+  && manifest.dsh.client.inject.every(name => name.startsWith('@qilin/') || name.startsWith('@deepseek-ai/dsh-')))
 
 const clientPath = join(packageRoot, 'lib/client.js')
 check('lib/client.js 存在', existsSync(clientPath))
@@ -96,8 +95,14 @@ check('client bundle 走 __ModuleLoader__ 模块表契约',
   && clientSource.replace(/\/\/# sourceMappingURL=.*\n?$/, '').trimEnd().endsWith('} });'))
 check('client 注册 plugins.bundle.config 槽位（key = 包名）',
   clientSource.includes('"plugins.bundle.config"') && clientSource.includes(`"${manifest.name}"`))
-check('client 表单绑定 configForms 命名空间',
-  clientSource.includes('configForms') && clientSource.includes(`"${manifest.name}"`))
+check('client 注入面收窄为 slots / locale（退休服务 configForms 零残留）',
+  clientSource.includes('inject: () => inject') && /var inject = \["slots", "locale"\]/.test(clientSource)
+  && !clientSource.includes('configForms'))
+check('client 设置卡消费页面契约 form.state / form.mutate（revision 栅栏批量写）',
+  clientSource.includes('form.state') && clientSource.includes('form.mutate'))
+check('client DSH 时代 settings 原语零残留（QiLin 3.0.11 无这些符号）',
+  !clientSource.includes('SettingsForm') && !clientSource.includes('SettingsValueField')
+  && !clientSource.includes('settingsNumberField'))
 check('client 通过 shell require 引 UI 原语（不打包 react）',
   clientSource.includes('require("@deepseek-ai/dsh-client-ui-primitives")')
   && clientSource.includes('require("react/jsx-runtime")'))
