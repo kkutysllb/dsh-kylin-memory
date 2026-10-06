@@ -8,7 +8,8 @@
 2. **本地验证**：
    ```bash
    pnpm check        # typecheck + vitest + esbuild
-   pnpm smoke        # 发布面契约（双 manifest、静态 patch、零 @deepseek-ai 导入）
+   pnpm smoke        # 发布面契约（双 manifest、静态 patch、零 @deepseek-ai 导入、client 按 QiLin 详情页契约断言）
+   pnpm smoke:client # client 产物按模块表等价桩加载并断言 keyed 设置槽位注册
    pnpm verify:package
    ```
 3. **双通道宿主冒烟**（行为变化触及适配器/manifest 时必须）：

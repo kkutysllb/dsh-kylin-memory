@@ -2,7 +2,7 @@
 
 > 状态：与 `src/rpc.ts`、`src/client/`、`package.json` 当前实现同步。
 
-## UI 决策（2026-10-02 定案 → 2026-10-04 修订）
+## UI 决策（2026-10-02 定案 → 2026-10-04 / 2026-10-06 修订）
 
 2026-10-02 定案：本插件不注册任何 Web client / slot，采用纯 Agent 工具入口。理由：核心价值（上下文接管 + 自动召回）完全自动，不需要 UI 参与；管理操作由 `km_*` 工具承担；避免侧边栏拥挤。
 
@@ -13,7 +13,14 @@
 - 宿主侧 `Config` schema（`src/schema.ts`）只声明这四个 `.volatile()` 字段（免重启 live-edit）；schema 解析保留未知键，patch 的其余配置（`assistantTools`、`messageRetention` 等）仍全部文件层管理；
 - smoke 由"无 client 块"反转为正向契约检查（`__ModuleLoader__` 包装、keyed 槽位、configForms 绑定、UI 原语经 shell require）。
 
-### 宿主机制要点（实测 DeepSeek Harness 0.2.0-rc.2 运行时）
+**2026-10-06 修订（v0.2.0，取代上列 v0.1.3 的客户端机制描述）**：QiLin 3.0.11 的 `@qilin/client-ui-primitives` 不含 DSH 时代 settings 原语（`SettingsForm` / `SettingsFormModel` / `SettingsValueField` / `settingsNumberField`，引擎全仓 grep 零命中），v0.1.3 客户端半边在真机上整个加载失败（`settingsNumberField is not a function`；宿主半边不受影响）。设置卡改按 QiLin 的 `plugins.bundle.config` 槽契约 `PluginConfigViewProps` 渲染：
+
+- 页面自带 form：卡片消费 `form.state`（`status` / `value` / `user` / `revision` / `writable`）与 `form.mutate`；不再注入 `configForms` 服务，入口 `inject` 收窄为 `["slots", "locale"]`；
+- 卡片本地暂存编辑，一次保存以 `{ op:'set'|'unset', path:[field] }` 批量提交、以读到的 `revision` 为栅栏；字段是否被覆盖以 `state.user` **键存在**判定（值相同也可能是覆盖），恢复默认走 `{ op:'unset' }`；离开页面丢弃未保存编辑；
+- 渲染用 QiLin 原语 `Input` / `Button`（shell 模块表 DSH 别名 `@deepseek-ai/dsh-client-ui-primitives` → `@qilin/client-ui-primitives`，react 仍不打包）；`summary` 座位留空（页面自绘标题与一句话简介），`plugins.item` 仍不占用；
+- smoke 第 4 节随改按新契约正向断言（注入面收窄、`form.state`/`form.mutate`、旧原语零残留、manifest `client.inject` 按 doctor `client-inject` 规则）；新增 `scripts/smoke-client.mjs`（`pnpm smoke:client`）——模块表等价桩加载产物、跑 `apply`、断言注册 keyed 槽位与字典命名空间。
+
+### 宿主机制要点（实测 DeepSeek Harness 0.2.0-rc.2 运行时；v0.2.0 起设置卡经详情页契约消费同一状态，不再直连这些 API）
 
 - `dsh-settings` 的 `SettingsForms.describe()` 枚举活跃插件条目，读模块导出的 `Config`（须有 `~standard` + `toJSON`），`volatileForm` 抽取 `.volatile()` 字段派生表单；命名空间 = patch insert 的 `id`；无 volatile 字段则整个命名空间不出现；
 - volatile 字段在 config resolve 后是 cosmokit 协议的冻结引用（`Symbol.for("cosmokit.volatile.write")`），保存时 `_commitVolatile` 原地换值、**不重挂插件**——因此插件运行时必须用 `readLive()`（types.ts）穿透读取，`freshTurnCount` 等字段在 `apply` 里保留引用而非解包快照；

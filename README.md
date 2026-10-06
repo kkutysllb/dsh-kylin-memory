@@ -24,10 +24,10 @@ Node.js 22.13+（使用内置 `node:sqlite`，安装期零原生构建）。
 
 ```bash
 # DSH 通道
-dsh plugin --profile web add github:kkutysllb/dsh-kylin-memory#v0.1.1   # npm 发布后可改用包名
+dsh plugin --profile web add github:kkutysllb/dsh-kylin-memory#v0.2.0   # npm 发布后可改用包名
 
 # QiLin/Kylin 通道
-qilin plugin --profile qilin add github:kkutysllb/dsh-kylin-memory#v0.1.1
+qilin plugin --profile qilin add github:kkutysllb/dsh-kylin-memory#v0.2.0
 ```
 
 本地开发：`link:` 前缀直装仓库目录（如 `qilin plugin --profile qilin add link:/Users/libing/kk_Projects/dsh-kylin-memory`），重启宿主生效。安装校验：`qilin plugin doctor dsh-kylin-memory` 应输出 `usable`。
@@ -68,18 +68,18 @@ export KYLIN_MEMORY_EMBEDDING_DIMENSIONS=1024
 
 bundle 配置（写入 `cordis.patch.yml` 的 config 块）：`freshTurnCount`（滚动保留轮数，默认 5）、`recallScope`（默认 `all`）、`freshnessHalfLifeDays`（导航新鲜度半衰期天数，默认 0=关）、`assistantTools`（默认 `search`）、`semanticScoreThreshold`（向量召回余弦门槛，默认 0.7）、`messageRetention`（默认 `keep: all`）。
 
-四个高频参数也开放在**宿主插件详情页的设置表单**（v0.1.3+，web 面板 → 插件 → dsh-kylin-memory）：`freshTurnCount`（保留最近轮数）、`maintenanceInterval`（维护节奏，每 N 轮一次图维护与保留 GC，默认 6）、`recallMaxNodes`（单次召回上限，默认 6）、`semanticScoreThreshold`（语义召回阈值，留空 = 默认 0.7）。表单保存写入 profile 用户覆盖层，bundle patch 是默认值层（可"恢复默认"）；volatile 字段即时生效、无需重启插件，其余配置仍走文件层。
+四个高频参数也开放在**宿主插件详情页的设置卡**（v0.1.3 起提供；v0.2.0 起改按 QiLin 详情页的 `plugins.bundle.config` 表单契约渲染，QiLin 3.0.11 确认）：`freshTurnCount`（保留最近轮数）、`maintenanceInterval`（维护节奏，每 N 轮一次图维护与保留 GC，默认 6）、`recallMaxNodes`（单次召回上限，默认 6）、`semanticScoreThreshold`（语义召回阈值，留空 = 默认 0.7）。保存写入 profile 用户覆盖层，bundle patch 是默认值层（可"恢复默认"）；volatile 字段即时生效、无需重启插件，其余配置仍走文件层。
 
 完整变量表与契约层说明见 [docs/01-tech/0101-双通道适配与契约层.md](docs/01-tech/0101-双通道适配与契约层.md)。
 
-## 验证状态（v0.1.3）
+## 验证状态（v0.2.0）
 
 - 177/177 自动化测试（vitest），`tsc --noEmit` 零错误，esbuild 产物自包含（host + web client）；GitHub Actions CI；
-- smoke 发布面契约 ALL PASS（双 manifest、静态 patch、零 `@deepseek-ai/*` 导入、client 契约）；
-- QiLin 3.0.8 与 DSH 0.2.0-rc.2 真实 web profile 安装 + 启动验证通过（21 个迁移完成）；
+- smoke 发布面契约 ALL PASS（双 manifest、静态 patch、零 `@deepseek-ai/*` 导入、client 按 QiLin 详情页契约正向断言）；
+- QiLin 3.0.8 与 DSH 0.2.0-rc.2 真实 web profile 安装 + 启动验证通过（21 个迁移完成，宿主半边 v0.2.0 未变动）；
 - RPC 管理通道双宿主验证：`POST /dsh-kylin-memory/overview` 未登录返回 401（鉴权栅栏生效）；
-- 极简 profile（无 web 栈）验证：插件正常激活（RPC 通道与设置表单同为动态可选面）；
-- client bundle 经 shell 模块表模拟验证全链路走通（factory 注册、configForms 命名空间、keyed 槽位、表单渲染）。
+- 极简 profile（无 web 栈）验证：插件正常激活（RPC 通道与设置卡同为动态可选面）；
+- client bundle（v0.2.0 改按 QiLin `PluginConfigViewProps` 契约）经 `pnpm smoke:client` 模块表等价桩验证：工厂加载、`apply` 注册 keyed 设置槽位与字典命名空间；DSH 时代 settings 原语产物内零残留。
 
 ## 文档索引
 
