@@ -1,24 +1,26 @@
 /**
- * Web client entry: the plugin detail page's settings form.
+ * Web client entry: the plugin detail page's settings card.
  *
  * Contract: this bundle is consumed through the client module table (esbuild
  * CJS output wrapped by the build script in window.__ModuleLoader__.load),
  * `exports.inject` names the Cordis client services, and `exports.apply(ctx)`
  * registers everything inside ctx.effect-managed lifecycles.
  *
- * The form binds to the settings namespace the host serves for this bundle —
- * the patch insert id `dsh-kylin-memory` — and renders through the official
- * settings primitives. The slot is the keyed `plugins.bundle.config` (the
- * seat for a bundle's own configuration; `plugins.item` is reserved for the
- * official settings pages), so the section appears on this bundle's detail
- * page only while the host actually serves the namespace.
+ * The card occupies the keyed slot `plugins.bundle.config` for this bundle and
+ * renders through QiLin's `PluginConfigViewProps`: the page owns the settings
+ * namespace and hands over `form.state` plus `form.mutate` (`form` is absent
+ * while the Host serves no namespace), so this entry stages edits locally and
+ * submits them as one `{ op: 'set' | 'unset', path: [field] }` batch fenced by
+ * the revision it read. A field is overridden exactly when its key is present
+ * in `state.user`.
  */
 
-export const inject = ["slots", "locale", "configForms"] as const;
+export const inject = ["slots", "locale"] as const;
 
 // Resolved through the shell's module table at runtime (factory require);
 // TypeScript sees the ambient declaration in ./modules.d.ts.
-import { SettingsForm, SettingsFormModel, SettingsValueField, settingsNumberField } from "@deepseek-ai/dsh-client-ui-primitives";
+import { useState } from "react";
+import { Button, Input } from "@deepseek-ai/dsh-client-ui-primitives";
 
 /** Settings namespace served by the host for this plugin's config schema. */
 const SETTINGS_NS = "dsh-kylin-memory";
@@ -29,11 +31,30 @@ interface Translate {
   (key: string): string;
 }
 
-/** Minimal shape of the shared configuration form scope (dsh-client-ui-settings). */
-interface ConfigFormScope {
-  getSnapshot(): Record<string, unknown>;
-  subscribe(listener: () => void): () => void;
-  mutate(ops: unknown[], expectedRevision?: number): Promise<boolean>;
+/** One atomic write the page's `mutate` accepts. */
+type PathOp =
+  | { op: "set"; path: string[]; value: number }
+  | { op: "unset"; path: string[] };
+
+/** Sync state of the plugin's settings namespace, as the page publishes it. */
+interface ConfigFormSnapshot {
+  status: "loading" | "ready" | "unavailable";
+  value: Record<string, unknown> | undefined;
+  user: unknown;
+  revision: number | undefined;
+  writable: boolean;
+}
+
+/** The page-owned form for this entry. */
+interface ConfigPageForm {
+  state: ConfigFormSnapshot;
+  mutate(ops: readonly PathOp[], expectedRevision?: number): Promise<boolean>;
+}
+
+/** Props the `plugins.bundle.config` seat supplies. */
+interface PluginConfigViewProps {
+  view: "summary" | "page";
+  form?: ConfigPageForm | undefined;
 }
 
 /** Minimal shape of the client plugin context this entry composes against. */
@@ -45,10 +66,6 @@ interface ClientContext {
   locale: {
     bind(ns: string): Translate;
     register(ns: string, dictionaries: Record<string, Record<string, string>>): unknown;
-  };
-  configForms: {
-    get(ns: string): ConfigFormScope;
-    whileServed(namespaces: string[], register: () => unknown): unknown;
   };
   effect(register: () => unknown, label?: string): unknown;
 }
@@ -65,6 +82,7 @@ const zh = {
   semanticScoreThresholdHint: "0 到 1 的余弦相似度下限，低于该值的语义结果不注入；留空使用默认 0.7。",
   overridden: "已覆盖",
   reset: "恢复默认",
+  loading: "加载中…",
   readOnly: "本部署的设置为只读。",
   unavailable: "该插件当前未加载，暂时无法配置。",
   save: "保存",
@@ -85,6 +103,7 @@ const en = {
   semanticScoreThresholdHint: "Cosine similarity floor between 0 and 1; lower-scoring semantic hits are not injected. Leave blank for the default 0.7.",
   overridden: "Overridden",
   reset: "Reset to default",
+  loading: "Loading…",
   readOnly: "This deployment stores settings read-only.",
   unavailable: "This plugin is not loaded, so it cannot be configured right now.",
   save: "Save",
@@ -103,116 +122,173 @@ const FIELDS = [
 
 type FieldName = (typeof FIELDS)[number];
 
-/** Staged form over the plugin's settings namespace. */
-class ConfigCardController {
-  private form: {
-    shell(): Record<string, unknown>;
-    field(field: FieldName): Record<string, unknown>;
-    bind(project: () => Record<string, unknown>): {
-      set(value: Record<string, unknown>): void;
-    };
-    actions(): Record<string, unknown>;
-    dispose(): void;
-  };
-  private store: { set(value: Record<string, unknown>): void };
+/** Each field's label and hint dictionary keys. */
+const FIELD_COPY: Record<FieldName, { label: string; hint: string }> = {
+  freshTurnCount: { label: "freshTurnCount", hint: "freshTurnCountHint" },
+  maintenanceInterval: { label: "maintenanceInterval", hint: "maintenanceIntervalHint" },
+  recallMaxNodes: { label: "recallMaxNodes", hint: "recallMaxNodesHint" },
+  semanticScoreThreshold: { label: "semanticScoreThreshold", hint: "semanticScoreThresholdHint" },
+};
 
-  constructor(scope: ConfigFormScope) {
-    const specs = FIELDS.map((field) => settingsNumberField(field));
-    this.form = new SettingsFormModel(scope, specs);
-    this.store = this.form.bind(() => this.projection());
-  }
-
-  private projection(): Record<string, unknown> {
-    const projection: Record<string, unknown> = { ...this.form.shell() };
-    for (const field of FIELDS) projection[field] = this.form.field(field);
-    return projection;
-  }
-
-  /** The face the slot registration injects into the card component. */
-  inject(): Record<string, unknown> {
-    return {
-      hooks: { configCard: this.store },
-      ...this.form.actions(),
-    };
-  }
-
-  dispose(): void {
-    this.form.dispose();
-  }
+/** Whether the user layer carries this field (presence marks an override, not its value). */
+function isOverridden(user: unknown, field: FieldName): boolean {
+  return typeof user === "object" && user !== null && Object.prototype.hasOwnProperty.call(user, field);
 }
 
-/** One field row of the settings form. */
-function ConfigField({ props, state, name, label, hint }: {
-  props: Record<string, any>;
-  state: Record<string, any>;
-  name: FieldName;
+/** Read one accepted field as the text an input shows. */
+function acceptedText(value: Record<string, unknown> | undefined, field: FieldName): string {
+  const raw = value?.[field];
+  return typeof raw === "number" || typeof raw === "string" ? String(raw) : "";
+}
+
+/** Whether one staged edit is a number or blank. */
+function isValid(text: string): boolean {
+  return text.trim() === "" || Number.isFinite(Number(text));
+}
+
+/** One labelled numeric row with its override state and reset control. */
+function ConfigField(props: {
+  field: FieldName;
   label: string;
   hint: string;
+  text: string;
+  invalid: boolean;
+  overridden: boolean;
+  disabled: boolean;
+  t: Translate;
+  onChange(text: string): void;
+  onReset(): void;
 }) {
+  const id = `plugin-config-kylin-memory-${props.field}`;
   return (
-    <SettingsValueField
-      id={`plugin-config-kylin-memory-${name}`}
-      label={label}
-      hint={hint}
-      overriddenLabel={props.t("overridden")}
-      resetLabel={props.t("reset")}
-      invalidLabel={props.t("invalidNumber")}
-      numeric
-      disabled={!state.writable}
-      {...state[name]}
-      onEdit={(text: string) => props.edit(name, text)}
-      onReset={() => props.resetField(name)}
-    />
+    <div data-config-field={props.field}>
+      <label htmlFor={id}>
+        <span>{props.label}</span>
+        {props.overridden ? <span data-overridden>{props.t("overridden")}</span> : null}
+      </label>
+      <Input
+        id={id}
+        inputMode="decimal"
+        aria-invalid={props.invalid}
+        aria-describedby={`${id}-hint`}
+        disabled={props.disabled}
+        value={props.text}
+        onChange={(event) => { props.onChange(event.target.value); }}
+      />
+      <small id={`${id}-hint`}>
+        {props.invalid ? props.t("invalidNumber") : props.hint}
+      </small>
+      {props.overridden ? (
+        <Button variant="ghost" size="sm" disabled={props.disabled} onClick={props.onReset}>
+          {props.t("reset")}
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
 /**
- * Render the bundle's settings form. The bundle detail page only asks for
- * `view: "page"`; the summary seat stays empty.
+ * Render the bundle's settings card for the plugin detail page.
+ *
+ * The page supplies the namespace state and the write; this component stages
+ * edits locally, so leaving the page drops them, and one save submits every
+ * changed field against the revision it read.
  */
-function KylinMemoryConfigCard(props: Record<string, any>) {
-  const state = props.useConfigCard((snapshot: Record<string, unknown>) => snapshot);
+export function KylinMemoryConfigCard(props: PluginConfigViewProps & { t: Translate }) {
+  const form = props.form;
+  const [staged, setStaged] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const t = props.t;
+
+  // The summary seat stays empty: the page draws the title and one-liner itself.
   if (props.view === "summary") return null;
-  const t = props.t as Translate;
+  if (form === undefined || form.state.status === "unavailable") {
+    return <p role="status">{t("unavailable")}</p>;
+  }
+  if (form.state.status === "loading") return <p role="status">{t("loading")}</p>;
+
+  const state = form.state;
+  const textOf = (field: FieldName): string => staged[field] ?? acceptedText(state.value, field);
+  const changed = FIELDS.filter((field) => textOf(field) !== acceptedText(state.value, field));
+  const invalid = FIELDS.some((field) => !isValid(textOf(field)));
+  const dirty = changed.length > 0;
+  const disabled = !state.writable || saving;
+
+  const save = (): void => {
+    const ops: PathOp[] = changed.map((field) => {
+      const text = textOf(field).trim();
+      return text === ""
+        ? { op: "unset", path: [field] }
+        : { op: "set", path: [field], value: Number(text) };
+    });
+    if (ops.length === 0) return;
+    setSaving(true);
+    setFailed(false);
+    void form.mutate(ops, state.revision)
+      .then((accepted) => {
+        if (accepted) setStaged({});
+        else setFailed(true);
+      }, () => { setFailed(true); })
+      .finally(() => { setSaving(false); });
+  };
+
+  const reset = (field: FieldName): void => {
+    setSaving(true);
+    setFailed(false);
+    void form.mutate([{ op: "unset", path: [field] }], state.revision)
+      .then((accepted) => {
+        if (accepted) setStaged((current) => { const next = { ...current }; delete next[field]; return next; });
+        else setFailed(true);
+      }, () => { setFailed(true); })
+      .finally(() => { setSaving(false); });
+  };
+
   return (
-    <SettingsForm
-      labels={{
-        unavailable: t("unavailable"),
-        readOnly: t("readOnly"),
-        saveFailed: t("saveFailed"),
-        save: t("save"),
-        saving: t("saving"),
-      }}
-      state={state}
-      onSave={props.save}
-      onDiscard={props.discard}
-    >
-      <ConfigField props={props} state={state} name="freshTurnCount" label={t("freshTurnCount")} hint={t("freshTurnCountHint")} />
-      <ConfigField props={props} state={state} name="maintenanceInterval" label={t("maintenanceInterval")} hint={t("maintenanceIntervalHint")} />
-      <ConfigField props={props} state={state} name="recallMaxNodes" label={t("recallMaxNodes")} hint={t("recallMaxNodesHint")} />
-      <ConfigField props={props} state={state} name="semanticScoreThreshold" label={t("semanticScoreThreshold")} hint={t("semanticScoreThresholdHint")} />
-    </SettingsForm>
+    <div data-config-namespace={SETTINGS_NS}>
+      {!state.writable ? <p role="status">{t("readOnly")}</p> : null}
+      {FIELDS.map((field) => (
+        <ConfigField
+          key={field}
+          field={field}
+          label={t(FIELD_COPY[field].label)}
+          hint={t(FIELD_COPY[field].hint)}
+          text={textOf(field)}
+          invalid={!isValid(textOf(field))}
+          overridden={isOverridden(state.user, field)}
+          disabled={disabled}
+          t={t}
+          onChange={(text) => { setStaged((current) => ({ ...current, [field]: text })); }}
+          onReset={() => { reset(field); }}
+        />
+      ))}
+      {failed ? <p role="status">{t("saveFailed")}</p> : null}
+      <div>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={!dirty || invalid || disabled}
+          onClick={save}
+        >
+          {t(saving ? "saving" : "save")}
+        </Button>
+      </div>
+    </div>
   );
 }
 
-/** Mount the settings card while the host serves the plugin's namespace. */
+/** Mount the bundle's settings card on the plugin detail page. */
 export function apply(ctx: ClientContext): void {
-  const t = ctx.locale.bind(LOCALE_NS);
   ctx.effect(
     () => ctx.locale.register(LOCALE_NS, { zh, en }),
     "kylin-memory: dictionaries",
   );
-  const card = new ConfigCardController(ctx.configForms.get(SETTINGS_NS));
-  ctx.effect(() => () => {
-    card.dispose();
-  }, "kylin-memory: form subscription");
   ctx.effect(
-    () => ctx.configForms.whileServed([SETTINGS_NS], () => ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({
+    () => ctx.slots.inject("plugins.bundle.config", () => ctx.slots.register({
       name: "plugins.bundle.config",
-      key: "dsh-kylin-memory",
+      key: SETTINGS_NS,
       locale: LOCALE_NS,
-      inject: () => card.inject(),
-    }, KylinMemoryConfigCard))),
+    }, KylinMemoryConfigCard)),
     "kylin-memory: settings page",
   );
 }

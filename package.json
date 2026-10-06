@@ -48,6 +48,7 @@
     "build": "node scripts/build.mjs",
     "check": "npm run typecheck && npm run test && npm run build",
     "smoke": "node scripts/smoke-plugin.mjs",
+    "smoke:client": "node scripts/smoke-client.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "sync:mirror": "node scripts/sync-to-dsh-plugins.mjs",
     "sync:check": "node scripts/sync-to-dsh-plugins.mjs --check",
